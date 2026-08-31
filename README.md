@@ -41,12 +41,7 @@ pip install -r requirements.txt
 如果使用 Unity 或前端框架，请在 `visualization/` 下补充对应项目的安装和运行说明。
 
 ## 协作流程
-
-1. 在 GitHub 上创建共享仓库，并邀请所有成员加入。
-2. 每个任务先创建 Issue，再基于 Issue 创建功能分支，例如 `feature/posture-svm-baseline`。
-3. 完成后提交 Pull Request，由至少 1 位成员检查后合并。
-4. 每位成员把 AI 协同开发记录持续追加到 `ai_logs/` 中。
-5. 课程提交前导出 git log，并放入 `docs/project_management/`。
+git提交流程见[git提交指南.md](Smart-Mattress-Project\git提交指南.md)
 
 
 ## 暂定分工
