@@ -48,7 +48,6 @@ pip install -r requirements.txt
 4. 每位成员把 AI 协同开发记录持续追加到 `ai_logs/` 中。
 5. 课程提交前导出 git log，并放入 `docs/project_management/`。
 
-GitHub 端需要人工完成的步骤见 [下一步操作说明.md](下一步操作说明.md) 和 [docs/github_shared_repo_guide.md](docs/github_shared_repo_guide.md)。
 
 ## 暂定分工
 
