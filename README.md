@@ -60,4 +60,4 @@ GitHub 端需要人工完成的步骤见 [下一步操作说明.md](下一步操
 | 可视化与前端 | `visualization/` | 柳雨萍 |
 | AI 记录与个人报告 | `ai_logs/`, `docs/final_reports/` | 全体成员 |
 
-说明：原始结构中的 AI 记录文件包含 `tangjunsong_ai_log.md`，如团队成员名单或模块负责人有变化，请同步更新本 README 与相关模板。
+
