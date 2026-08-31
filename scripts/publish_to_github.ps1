@@ -12,8 +12,9 @@ if (-not (Test-Path ".git")) {
 Write-Host "Repository: $(Get-Location)"
 Write-Host "Remote URL: $RemoteUrl"
 
-$existingOrigin = git remote get-url origin 2>$null
-if ($LASTEXITCODE -eq 0 -and $existingOrigin) {
+$existingRemotes = git remote
+if ($existingRemotes -contains "origin") {
+    $existingOrigin = git remote get-url origin
     Write-Host "origin already exists: $existingOrigin"
     git remote set-url origin $RemoteUrl
     Write-Host "Updated origin."
