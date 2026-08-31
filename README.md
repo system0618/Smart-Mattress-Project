@@ -41,7 +41,8 @@ pip install -r requirements.txt
 如果使用 Unity 或前端框架，请在 `visualization/` 下补充对应项目的安装和运行说明。
 
 ## 协作流程
-git提交流程见[git提交指南.md](Smart-Mattress-Project/git提交指南.md)
+git提交流程见git提交指南
+
 
 
 ## 暂定分工
