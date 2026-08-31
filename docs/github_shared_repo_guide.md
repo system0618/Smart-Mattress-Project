@@ -33,6 +33,13 @@ git remote set-url origin https://github.com/<你的用户名或组织名>/Smart
 git push -u origin main
 ```
 
+也可以使用仓库内的辅助脚本：
+
+```powershell
+cd E:\workplace\Smart-Mattress-Project
+.\scripts\publish_to_github.ps1 -RemoteUrl "https://github.com/<你的用户名或组织名>/Smart-Mattress-Project.git"
+```
+
 如果 GitHub 要求登录，按终端提示完成浏览器授权或输入 Personal Access Token。
 
 ## 3. 邀请团队成员
