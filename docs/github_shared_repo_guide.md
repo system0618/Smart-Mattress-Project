@@ -40,7 +40,25 @@ cd E:\workplace\Smart-Mattress-Project
 .\scripts\publish_to_github.ps1 -RemoteUrl "https://github.com/<你的用户名或组织名>/Smart-Mattress-Project.git"
 ```
 
+请复制纯 URL，不要复制为 `[https://...](https://...)` 这种 Markdown 链接格式。
+
 如果 GitHub 要求登录，按终端提示完成浏览器授权或输入 Personal Access Token。
+
+如果遇到 `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS` 或 `could not read Username for 'https://github.com'`，先执行：
+
+```powershell
+git config credential.helper manager
+git config http.sslBackend openssl
+git credential-manager github login --url https://github.com --username <你的用户名> --browser --force
+git push -u origin main
+```
+
+如果浏览器认证没有弹出，使用设备码认证：
+
+```powershell
+git credential-manager github login --url https://github.com --username <你的用户名> --device --force
+git push -u origin main
+```
 
 ## 3. 邀请团队成员
 

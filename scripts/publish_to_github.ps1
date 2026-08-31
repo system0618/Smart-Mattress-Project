@@ -9,6 +9,16 @@ if (-not (Test-Path ".git")) {
     throw "Please run this script from the repository root: Smart-Mattress-Project"
 }
 
+$RemoteUrl = $RemoteUrl.Trim()
+if ($RemoteUrl -match '^\[[^\]]+\]\((?<url>https://[^)]+)\)$') {
+    $RemoteUrl = $Matches["url"]
+    Write-Host "Detected Markdown link input. Using plain URL: $RemoteUrl"
+}
+
+if ($RemoteUrl -notmatch '^https://github\.com/[^/\s]+/[^/\s]+\.git$') {
+    throw "RemoteUrl must be a plain GitHub HTTPS URL, for example: https://github.com/system0618/Smart-Mattress-Project.git"
+}
+
 Write-Host "Repository: $(Get-Location)"
 Write-Host "Remote URL: $RemoteUrl"
 
