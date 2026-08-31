@@ -1,0 +1,1 @@
+"""Body part segmentation module."""
