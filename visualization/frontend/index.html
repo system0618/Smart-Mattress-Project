@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能床垫 · 实时压力可视化</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-title">
+      <h1>智能床垫实时压力可视化</h1>
+      <p>压力热力图 · 睡眠状态 · 压力指标 · 气囊状态</p>
+    </div>
+    <div class="live-pill">
+      <span class="live-dot" id="liveDot"></span>
+      <span id="liveText">本地样例回放</span>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <section class="card heatmap-card">
+      <div class="card-header">
+        <h2>实时压力热力图</h2>
+        <div class="card-tools">
+          <label><input type="checkbox" id="toggleRegion" checked> 区域划分结果</label>
+          <label><input type="checkbox" id="toggleAirbag"> 气囊分区</label>
+        </div>
+      </div>
+      <div id="heatmapWrap">
+        <canvas id="heatmapCanvas"></canvas>
+        <div id="cellTooltip" class="cell-tooltip hidden"></div>
+      </div>
+      <div class="colorbar-row">
+        <span id="colorbarMin">0</span>
+        <canvas id="colorbarCanvas" width="256" height="14"></canvas>
+        <span id="colorbarMax">300</span>
+        <span class="colorbar-unit">压力值</span>
+      </div>
+    </section>
+
+    <aside class="side-column">
+      <section class="card">
+        <div class="card-header"><h2>睡眠状态</h2><span class="tag">实时</span></div>
+        <div class="sleep-state">
+          <div class="state-main">
+            <span class="posture-icon" id="postureIcon">🛏️</span>
+            <div>
+              <div class="big-posture" id="sleepPosture">--</div>
+              <div class="big-state" id="sleepState">--</div>
+            </div>
+          </div>
+          <div class="state-meta">
+            <span>识别来源 <b id="postureSource">样例标注</b></span>
+            <span>置信度 <b id="postureConfidence">--</b></span>
+            <span>身体区域 <b id="segmentationSource">未接入</b></span>
+            <span>当前帧 <b id="frameInfo">-- / --</b></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>压力指标</h2><span class="tag">实时</span></div>
+        <div class="metric-grid">
+          <div class="metric">
+            <div class="metric-label">最大压力</div>
+            <div class="metric-value" id="metricMax">--</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">平均压力</div>
+            <div class="metric-value" id="metricMean">--</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">接触面指数</div>
+            <div class="metric-value" id="metricContact">--</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">接触传感器数</div>
+            <div class="metric-value" id="metricCells">--</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h2>气囊状态</h2>
+          <label class="switch-label" title="根据分区压力自动充放气">
+            <input type="checkbox" id="autoAirbag" checked> 自动调节
+          </label>
+        </div>
+        <canvas id="airbagCanvas"></canvas>
+        <div id="airbagLegend" class="airbag-legend"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>传感器点压力曲线</h2></div>
+        <div class="sensor-info" id="sensorInfo">点击热力图选择传感器点</div>
+        <canvas id="sensorChart"></canvas>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>指标趋势</h2><span class="tag">最近 120 帧</span></div>
+        <canvas id="metricChart"></canvas>
+      </section>
+    </aside>
+  </main>
+
+  <section class="card control-card">
+    <div class="card-header"><h2>数据回放控制</h2></div>
+    <div class="controls">
+      <label>数据源
+        <select id="sampleSelect"></select>
+      </label>
+      <button id="playBtn" class="btn primary">暂停</button>
+      <button id="stepBtn" class="btn">单帧前进</button>
+      <button id="resetBtn" class="btn">复位</button>
+      <button id="localBtn" class="btn">打开本地数据…</button>
+      <input type="file" id="fileInput" accept=".txt" hidden>
+      <label>速度
+        <select id="speedSelect">
+          <option value="2">0.5×</option>
+          <option value="4" selected>1×</option>
+          <option value="8">2×</option>
+          <option value="16">4×</option>
+          <option value="32">8×</option>
+        </select>
+      </label>
+    </div>
+    <div class="frame-row">
+      <span id="frameProgressLabel">0 / 0</span>
+      <input type="range" id="frameSlider" min="0" max="0" value="0" step="1">
+      <span id="movementLabel">静态躺</span>
+    </div>
+  </section>
+
+  <footer class="app-footer">
+    本地演示：选择一个 txt 数据组，睡姿/身体划分结果可通过 <code>SmartMattressViewer.setPostureResult()</code>、
+    <code>setSegmentationResult()</code> 等预设接口推送，热力图色标固定 0–300。
+  </footer>
+
+  <script src="data/samples.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/palette.js"></script>
+  <script src="js/metrics.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

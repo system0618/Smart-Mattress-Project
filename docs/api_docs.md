@@ -81,6 +81,19 @@
 }
 ```
 
+## Frontend Consumption（前端如何接收以上接口）
+
+JS 前端（`visualization/frontend/`）已按上述 JSON 结构预留全局入口，算法模块只需把输出推送给页面：
+
+| 数据 | 全局方法 |
+| --- | --- |
+| Pressure Frame | `SmartMattressViewer.pushFrame(payload)` |
+| Posture Recognition Output | `SmartMattressViewer.setPostureResult(payload)` |
+| Body Segmentation Output | `SmartMattressViewer.setSegmentationResult(payload)` |
+| Realtime Visualization State | `SmartMattressViewer.setRealtimeState(payload)` |
+
+推荐通过 WebSocket 在后端转发原始 JSON，前端仅做字段映射。热力图色标固定为 0–300。
+
 ## File Naming
 
 建议训练数据文件名包含用户、睡姿和采集序号：
