@@ -46,16 +46,15 @@
 ```json
 {
   "frame_id": "frame_000001",
-  "segmentation_shape": [32, 64],
+  "segmentation_shape": [44, 24],
   "segmentation_mask": [[0, 1, 1, 2]],
   "labels": {
     "0": "background",
-    "1": "head",
-    "2": "trunk",
-    "3": "left_arm",
-    "4": "right_arm",
-    "5": "left_leg",
-    "6": "right_leg"
+    "1": "shoulder",
+    "2": "back",
+    "3": "waist",
+    "4": "hip",
+    "5": "thigh"
   }
 }
 ```
