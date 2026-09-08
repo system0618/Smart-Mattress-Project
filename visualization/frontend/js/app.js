@@ -61,7 +61,16 @@
     bindEvents();
     dom.regionLegend.classList.toggle("hidden", !dom.toggleRegion.checked);
     if (samples.length) {
-      loadSample(samples[0].id);
+      let initialId = samples[0].id;
+      try {
+        const querySample = new URLSearchParams(window.location.search).get("sample");
+        if (querySample && samples.some((sample) => sample.id === querySample)) {
+          initialId = querySample;
+        }
+      } catch (error) {
+        // 忽略 URL 参数解析异常，回退到第一个样例
+      }
+      loadSample(initialId);
     } else {
       showNoDataHint();
     }
@@ -411,7 +420,8 @@
 
   function updateMetricUI(stats) {
     dom.metricMax.textContent = formatMetric(stats.maxPressure);
-    dom.metricMean.textContent = formatMetric(stats.meanPressure);
+    // 指标面板展示“接触面平均压力”：只统计超过接触阈值的传感器
+    dom.metricMean.textContent = formatMetric(stats.meanActivePressure);
     dom.metricContact.textContent = stats.contactAreaPercent.toFixed(1) + "%";
     dom.metricCells.textContent = `${stats.activeCells} / ${stats.totalCells}`;
   }
@@ -655,7 +665,7 @@
     if (!record) return;
     const history = state.history;
     history.max.push(stats.maxPressure);
-    history.mean.push(stats.meanPressure);
+    history.mean.push(stats.meanActivePressure);
     history.contact.push(stats.contactAreaPercent);
     const pointValue =
       state.selectedPoint &&
@@ -673,27 +683,62 @@
 
   function updateAirbags(flat, sample) {
     const zones = Config.airbagZones;
-    // 每个分区同时计算“平均压力”和“分区内最大压力”。
-    // 支撑度按人体工学逻辑：受力大的部位（臀/肩）应降低气囊支撑以分散压力；
-    // 受力小但身体仍接触的部位（腰）反而需要更多充气支撑。
-    const zoneInfo = zones.map((zone) => ({
-      mean: Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols),
-      max: Metrics.rectMaxPoint(flat, Config.cols, zone.rows, zone.cols).value,
-    }));
-    const maxMean = Math.max(1, ...zoneInfo.map((info) => info.mean));
-    // 判断“该区域是否真的有身体接触”：分区峰值过低说明身体没有压在这里，
-    // 此时不充气（避免空区域被顶到最高）。
     const frameMax = sample && sample.max_value ? sample.max_value : Math.max(...flat, 1);
     const presenceThreshold = Math.max(Config.contactThreshold * 5, frameMax * 0.02);
     const auto = dom.autoAirbag && dom.autoAirbag.checked;
 
-    zones.forEach((zone, index) => {
-      const info = zoneInfo[index];
-      const hasBodyContact = info.max >= presenceThreshold;
-      const normalizedPressure = info.mean / maxMean;
-      const target = hasBodyContact
-        ? Math.max(0, Math.min(1, 1 - normalizedPressure))
+    // 统计每个气囊分区：平均压力（区内全部传感器平均）与分区最大压力
+    const infos = zones.map((zone) => ({
+      zone,
+      mean: Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols),
+      max: Metrics.rectMaxPoint(flat, Config.cols, zone.rows, zone.cols).value,
+      target: 0,
+    }));
+
+    // 按大区域（肩/背/腰/臀）分组，每组内为左/中/右三个气囊
+    const groups = new Map();
+    for (const info of infos) {
+      if (!groups.has(info.zone.bandId)) groups.set(info.zone.bandId, []);
+      groups.get(info.zone.bandId).push(info);
+    }
+
+    // 每个大区域内“压力最大的气囊”是身体真正压着的主气囊；
+    // 主气囊之间横向比较：压力越小 → 需要的支撑越高。
+    const mainByBand = new Map();
+    const mainPressures = [];
+    for (const [bandId, entries] of groups) {
+      const main = entries.reduce(
+        (best, entry) => (entry.mean > best.mean ? entry : best),
+        entries[0]
+      );
+      mainByBand.set(bandId, main);
+      if (main.max >= presenceThreshold) mainPressures.push(main.mean);
+    }
+    const maxMainPressure = Math.max(1, ...mainPressures);
+
+    for (const [bandId, entries] of groups) {
+      const main = mainByBand.get(bandId);
+      const mainHasBody = main.max >= presenceThreshold;
+      const mainSupport = mainHasBody
+        ? Math.max(0, Math.min(1, 1 - main.mean / maxMainPressure))
         : 0;
+
+      for (const info of entries) {
+        if (info.zone.id === main.zone.id) {
+          info.target = mainSupport;
+        } else {
+          // 附属气囊仅在确实有接触时按压力比例充气，
+          // 且支撑程度不超过本大区域的主气囊。
+          const ownHasBody = info.max >= presenceThreshold;
+          const ratio = main.mean > 0 ? Math.min(1, info.mean / main.mean) : 0;
+          info.target = ownHasBody ? mainSupport * ratio : 0;
+        }
+      }
+    }
+
+    for (const info of infos) {
+      const zone = info.zone;
+      const target = info.target;
       const current = state.airbagStates[zone.id] || {
         level: 0,
         status: "stable",
@@ -715,8 +760,9 @@
       }
       current.mean = info.mean;
       current.pressure = info.mean;
+      current.target = target;
       state.airbagStates[zone.id] = current;
-    });
+    }
 
     state.airbagSampleMax = sample ? sample.max_value : 0;
   }
@@ -800,7 +846,7 @@
       ],
       {
         maxPoints: Config.historyLength,
-        xLabel: "帧（最大/平均压力 ADC，接触面指数 %）",
+        xLabel: "帧（最大压力/接触面平均压力 ADC，接触面指数 %）",
       }
     );
   }
@@ -1042,13 +1088,16 @@
   }
 
   function applyExternalStats(stats) {
-    const mapping = [
-      ["max", "max_pressure"],
-      ["mean", "mean_pressure"],
-    ];
-    for (const [suffix, key] of mapping) {
-      const value = stats[key] ?? stats[`${suffix}Pressure`];
-      if (value != null) dom["metric" + cap(suffix)].textContent = formatMetric(value);
+    const maxValue = stats.max_pressure ?? stats.maxPressure;
+    if (maxValue != null) dom.metricMax.textContent = formatMetric(maxValue);
+    // 后端可优先提供接触面平均压力；没有时回退到全阵列平均压力
+    const meanValue =
+      stats.mean_active_pressure ??
+      stats.meanActivePressure ??
+      stats.mean_pressure ??
+      stats.meanPressure;
+    if (meanValue != null) {
+      dom.metricMean.textContent = formatMetric(meanValue);
     }
     const contact =
       stats["contact_area_index"] ?? stats.contactAreaIndex ?? stats.contactIndex;
