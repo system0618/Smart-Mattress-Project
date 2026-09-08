@@ -4,8 +4,8 @@
  * 说明：
  * - rows/cols 来自新版 44 行 x 24 列压力传感器阵列；
  * - regions 参考新版“区域划分数据”中 5 个身体部位矩形（x 为列，y 为行）；
- * - airbagZones 为演示用虚拟分区（肩/背/腰/臀/大腿 × 左/中/右，与身体部位划分一致）。
- *   真实“气囊-传感器 对应关系”确认后，只需在本文件替换 airbagZones。
+ * - airbagZones 为演示用虚拟分区（肩/背/腰/臀 × 左/中/右，不含大腿）。
+ *   大腿不参与气囊支撑；真实“气囊-传感器 对应关系”确认后，只需在本文件替换 airbagZones。
  */
 (function (global) {
   "use strict";
@@ -62,7 +62,6 @@
       { id: "back", name: "背部", rows: [8, 13], cols: [6, 18] },
       { id: "waist", name: "腰", rows: [13, 18], cols: [6, 18] },
       { id: "hip", name: "臀", rows: [18, 27], cols: [5, 20] },
-      { id: "thigh", name: "大腿", rows: [27, 36], cols: [5, 20] },
     ];
     const sides = ["左", "中", "右"];
     const zones = [];
