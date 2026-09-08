@@ -673,14 +673,27 @@
 
   function updateAirbags(flat, sample) {
     const zones = Config.airbagZones;
-    const means = zones.map((zone) =>
-      Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols)
-    );
-    const maxMean = Math.max(1, ...means);
+    // 每个分区同时计算“平均压力”和“分区内最大压力”。
+    // 支撑度按人体工学逻辑：受力大的部位（臀/肩）应降低气囊支撑以分散压力；
+    // 受力小但身体仍接触的部位（腰）反而需要更多充气支撑。
+    const zoneInfo = zones.map((zone) => ({
+      mean: Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols),
+      max: Metrics.rectMaxPoint(flat, Config.cols, zone.rows, zone.cols).value,
+    }));
+    const maxMean = Math.max(1, ...zoneInfo.map((info) => info.mean));
+    // 判断“该区域是否真的有身体接触”：分区峰值过低说明身体没有压在这里，
+    // 此时不充气（避免空区域被顶到最高）。
+    const frameMax = sample && sample.max_value ? sample.max_value : Math.max(...flat, 1);
+    const presenceThreshold = Math.max(Config.contactThreshold * 5, frameMax * 0.02);
     const auto = dom.autoAirbag && dom.autoAirbag.checked;
 
     zones.forEach((zone, index) => {
-      const target = means[index] / maxMean;
+      const info = zoneInfo[index];
+      const hasBodyContact = info.max >= presenceThreshold;
+      const normalizedPressure = info.mean / maxMean;
+      const target = hasBodyContact
+        ? Math.max(0, Math.min(1, 1 - normalizedPressure))
+        : 0;
       const current = state.airbagStates[zone.id] || {
         level: 0,
         status: "stable",
@@ -700,7 +713,8 @@
               : "stable";
         current.level = next;
       }
-      current.mean = means[index];
+      current.mean = info.mean;
+      current.pressure = info.mean;
       state.airbagStates[zone.id] = current;
     });
 
