@@ -16,6 +16,38 @@
 ### 人工修改与验证
 ```
 
+## 2026-09-08
+
+### 使用工具
+
+Codex：`git`（fetch/merge）、PyMuPDF（课程 PDF 解析）、Python（接口自测）、无头 Edge（页面冒烟测试）。
+
+### 提问或任务
+
+1. 阅读课程 PDF（2026 秋季《专业方向实践》），明确“基于实时数据的智能床垫可视化展示”功能要求。
+2. 把远程仓库 https://github.com/system0618/Smart-Mattress-Project.git 的最新提交同步到本地。
+3. 将队友姚乐实现的身体部位划分（UNet 像素分割）与可视化前端连接起来。
+
+### AI 输出摘要
+
+- 远程 `main` 已新增“身体部位划分 UNet 管线（样本级 97.4% / 用户级 92.3%）”，本地 `feature/visualization` 通过 `git fetch` + fast-forward 合并到最新 `582b9fa`；
+- 身体划分输出沿用 `docs/api_docs.md` 的 6 类约定（background/shoulder/back/waist/hip/thigh，44×24 mask），前端据此叠加热力图；
+- 新增一体化服务 `visualization/frontend/server.py`：同时提供页面静态资源和 `POST /api/segment`（加载 `src/body_segmentation/models/best.pt` 推理，按训练同款逐帧 min-max 归一化并插值回 44×24）；`GET /api/status` 返回模型状态；`--mock` 可在没有权重时用模拟掩码联调前端；
+- 前端 `app.js` 接入：加载样例/本地 txt 时一次性请求全部帧掩码并按帧叠加；外部 `pushFrame` 模式逐帧请求分割结果；页面“身体区域”标注 UNet 来源，服务缺失时自动回退区域矩形占位；热力图下方新增肩/背/腰/臀/大腿图例；
+- 更新 `visualization/frontend/README.md` 与 `docs/api_docs.md`（Local Segmentation Bridge 章节）。
+
+### 采纳内容
+
+- `visualization/frontend/server.py`（新增）
+- `visualization/frontend/js/app.js`、`js/config.js`（分割服务接入、逐帧掩码缓存）
+- `visualization/frontend/index.html`、`css/style.css`（区域图例）
+- `visualization/frontend/README.md`、`docs/api_docs.md`（运行与接口说明）
+
+### 人工修改与验证
+
+- 用 `server.py --mock` + 无头 Edge 打开页面：区域图例正常显示，热力图叠加掩码，“身体区域”来源显示 `body_segmentation · mock联调掩码`，回放/指标/气囊均正常；
+- `best.pt` 不在本机（队友姚乐训练产物，仓库按 .gitignore 不提交），真实模型模式待拿到权重后放置到 `src/body_segmentation/models/best.pt` 再运行 `python visualization/frontend/server.py` 验证。
+
 ## 2026-09-04
 
 ### 使用工具

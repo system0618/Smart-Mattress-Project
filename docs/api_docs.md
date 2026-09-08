@@ -93,6 +93,37 @@ JS 前端（`visualization/frontend/`）已按上述 JSON 结构预留全局入�
 
 推荐通过 WebSocket 在后端转发原始 JSON，前端仅做字段映射。热力图色标固定为 0–300。
 
+## Local Segmentation Bridge（可视化本机联调）
+
+`visualization/frontend/server.py` 提供一体化 HTTP 服务，方便直接联调身体部位划分
+（无需再单独起 WebSocket 服务）：
+
+- `GET /api/status`：返回模型文件是否存在、是否已加载、6 类 labels。
+- `POST /api/segment`：请求体为 `{ "frames": [{ "pressure_matrix": [[...]] }] }`
+  （也接受 1056 长度一维数组），服务加载 `src/body_segmentation/models/best.pt`
+  后逐帧返回 Body Segmentation Output 数组：
+
+```json
+{
+  "ok": true,
+  "num_frames": 1,
+  "results": [
+    {
+      "frame_id": "sample_0",
+      "segmentation_shape": [44, 24],
+      "segmentation_mask": [[0, 0, 1, 1]],
+      "labels": {
+        "0": "background", "1": "shoulder", "2": "back",
+        "3": "waist", "4": "hip", "5": "thigh"
+      },
+      "source": "body_segmentation · UNet"
+    }
+  ]
+}
+```
+
+启动方式：`python visualization/frontend/server.py`（`--mock` 可无模型联调前端）。
+
 ## File Naming
 
 建议训练数据文件名包含用户、睡姿和采集序号：

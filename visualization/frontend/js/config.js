@@ -46,6 +46,14 @@
     airbagZones: buildAirbagZones(),
 
     historyLength: 120,
+
+    // 身体部位划分服务（visualization/frontend/server.py）。
+    // 服务在线时前端自动把当前帧发到 /api/segment，用 UNet 掩码替换演示矩形。
+    segmentation: {
+      auto: true,        // 探测到服务后自动请求分割结果
+      apiBase: "/api",   // file:// 直接打开时不可用，将回退到演示矩形
+      timeoutMs: 30000,
+    },
   };
 
   function buildAirbagZones() {
