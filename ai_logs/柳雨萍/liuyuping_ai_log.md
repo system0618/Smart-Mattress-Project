@@ -46,7 +46,7 @@ Codex：`git`（fetch/merge）、PyMuPDF（课程 PDF 解析）、Python（接�
 ### 人工修改与验证
 
 - 用 `server.py --mock` + 无头 Edge 打开页面：区域图例正常显示，热力图叠加掩码，“身体区域”来源显示 `body_segmentation · mock联调掩码`，回放/指标/气囊均正常；
-- `best.pt` 不在本机（队友姚乐训练产物，仓库按 .gitignore 不提交），真实模型模式待拿到权重后放置到 `src/body_segmentation/models/best.pt` 再运行 `python visualization/frontend/server.py` 验证。
+- 补充（同日）：从姚乐处获取 `body_segmentation_models.rar`，解压 `best.pt`（epoch 48，val_acc 0.9253）与 `metrics.json` 到 `src/body_segmentation/models/`；在本机 Miniconda base 安装 CPU 版 torch 2.8.0 + h5py 后，单帧 CPU 推理约 40 ms，`server.py` 页面“身体区域”已显示 `body_segmentation · UNet`，真实模型端到端验证通过。
 
 ## 2026-09-04
 
