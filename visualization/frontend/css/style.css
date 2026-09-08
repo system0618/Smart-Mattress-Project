@@ -163,6 +163,29 @@ body {
   z-index: 5;
 }
 
+.region-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.region-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.region-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
 .hidden { display: none; }
 
 .colorbar-row {

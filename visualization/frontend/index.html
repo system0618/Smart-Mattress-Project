@@ -24,6 +24,7 @@
         <h2>实时压力热力图</h2>
         <div class="card-tools">
           <label><input type="checkbox" id="toggleRegion" checked> 区域划分结果</label>
+          <label><input type="checkbox" id="toggleRegionLabels" checked> 部位名称</label>
           <label><input type="checkbox" id="toggleAirbag"> 气囊分区</label>
         </div>
       </div>
@@ -31,6 +32,7 @@
         <canvas id="heatmapCanvas"></canvas>
         <div id="cellTooltip" class="cell-tooltip hidden"></div>
       </div>
+      <div id="regionLegend" class="region-legend hidden"></div>
       <div class="colorbar-row">
         <span id="colorbarMin">0</span>
         <canvas id="colorbarCanvas" width="256" height="14"></canvas>
@@ -67,7 +69,7 @@
             <div class="metric-value" id="metricMax">--</div>
           </div>
           <div class="metric">
-            <div class="metric-label">平均压力</div>
+            <div class="metric-label">接触面平均压力</div>
             <div class="metric-value" id="metricMean">--</div>
           </div>
           <div class="metric">
@@ -84,7 +86,7 @@
       <section class="card">
         <div class="card-header">
           <h2>气囊状态</h2>
-          <label class="switch-label" title="根据分区压力自动充放气">
+          <label class="switch-label" title="低压接触区（如腰）自动充气支撑，高压区（如臀）自动放气减压">
             <input type="checkbox" id="autoAirbag" checked> 自动调节
           </label>
         </div>

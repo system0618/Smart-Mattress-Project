@@ -29,6 +29,7 @@
     selectedPoint: { row: 20, col: 12 },
     selectedZoneId: null,
     showRegions: true,
+    showRegionLabels: true,
     showAirbags: false,
     history: {
       max: [],
@@ -41,6 +42,10 @@
     postureOverride: null,
     segmentation: null,
     demoSegmentation: true,
+    segmentationServiceState: "offline", // offline | checking | online | unavailable
+    frameMasks: null, // 当前样例逐帧 UNet 掩码（与 state.segmentation 同构）
+    frameMaskSampleId: null,
+    segRequestId: 0,
   };
 
   function $(id) {
@@ -51,10 +56,21 @@
     collectDom();
     populateSamples();
     populateAirbagLegend();
+    populateRegionLegend();
     Palette.drawColorbar($("colorbarCanvas"));
     bindEvents();
+    dom.regionLegend.classList.toggle("hidden", !dom.toggleRegion.checked);
     if (samples.length) {
-      loadSample(samples[0].id);
+      let initialId = samples[0].id;
+      try {
+        const querySample = new URLSearchParams(window.location.search).get("sample");
+        if (querySample && samples.some((sample) => sample.id === querySample)) {
+          initialId = querySample;
+        }
+      } catch (error) {
+        // 忽略 URL 参数解析异常，回退到第一个样例
+      }
+      loadSample(initialId);
     } else {
       showNoDataHint();
     }
@@ -75,6 +91,7 @@
       "heatmapCanvas",
       "heatmapWrap",
       "cellTooltip",
+      "regionLegend",
       "colorbarMin",
       "colorbarMax",
       "sleepPosture",
@@ -94,6 +111,7 @@
       "sensorInfo",
       "metricChart",
       "toggleRegion",
+      "toggleRegionLabels",
       "toggleAirbag",
       "autoAirbag",
       "liveDot",
@@ -135,6 +153,19 @@
       item.append(dot, name, pct);
       item.addEventListener("click", () => selectAirbagZone(zone.id));
       dom.airbagLegend.appendChild(item);
+    });
+  }
+
+  function populateRegionLegend() {
+    dom.regionLegend.innerHTML = "";
+    Config.regions.forEach((region) => {
+      const item = document.createElement("span");
+      item.className = "region-item";
+      const dot = document.createElement("span");
+      dot.className = "region-dot";
+      dot.style.background = region.color;
+      item.append(dot, document.createTextNode(region.name));
+      dom.regionLegend.appendChild(item);
     });
   }
 
@@ -180,6 +211,11 @@
 
     dom.toggleRegion.addEventListener("change", (event) => {
       state.showRegions = event.target.checked;
+      dom.regionLegend.classList.toggle("hidden", !state.showRegions);
+      redrawLast();
+    });
+    dom.toggleRegionLabels.addEventListener("change", (event) => {
+      state.showRegionLabels = event.target.checked;
       redrawLast();
     });
     dom.toggleAirbag.addEventListener("change", (event) => {
@@ -295,6 +331,9 @@
     state.postureOverride = null;
     state.segmentation = null;
     state.demoSegmentation = true;
+    state.frameMasks = null;
+    state.frameMaskSampleId = null;
+    state.segRequestId += 1;
     if (sample.posture && sample.posture !== "unknown") {
       state.postureOverride = {
         posture: sample.posture,
@@ -314,6 +353,7 @@
     dom.frameSlider.max = sample.frames.length - 1;
     dom.frameSlider.value = 0;
     dom.colorbarMax.textContent = formatMetric(sample.max_value);
+    fetchSegmentationForSample(sample);
     renderFrame(0, true);
     play();
   }
@@ -353,10 +393,19 @@
     updateAirbags(flat, sample, stats);
 
     state.lastRendered = { flat, meta, sample };
-    if (state.demoSegmentation) {
+    const cachedSegmentation =
+      state.frameMaskSampleId === sample.id &&
+      Array.isArray(state.frameMasks) &&
+      state.frameMasks[state.currentFrame]
+        ? state.frameMasks[state.currentFrame]
+        : null;
+    if (cachedSegmentation) {
+      state.segmentation = cachedSegmentation;
+      state.demoSegmentation = false;
+    } else if (state.demoSegmentation) {
       state.segmentation = buildDemoSegmentation(flat, sample);
-      updateSegmentationSource();
     }
+    updateSegmentationSource();
     dom.frameSlider.value = state.currentFrame;
     dom.frameSlider.max = sample ? sample.frames.length - 1 : 0;
     dom.frameProgressLabel.textContent = `${state.currentFrame} / ${
@@ -371,7 +420,8 @@
 
   function updateMetricUI(stats) {
     dom.metricMax.textContent = formatMetric(stats.maxPressure);
-    dom.metricMean.textContent = formatMetric(stats.meanPressure);
+    // 指标面板展示“接触面平均压力”：只统计超过接触阈值的传感器
+    dom.metricMean.textContent = formatMetric(stats.meanActivePressure);
     dom.metricContact.textContent = stats.contactAreaPercent.toFixed(1) + "%";
     dom.metricCells.textContent = `${stats.activeCells} / ${stats.totalCells}`;
   }
@@ -440,9 +490,169 @@
   }
 
   function updateSegmentationSource() {
-    dom.segmentationSource.textContent = state.segmentation
-      ? state.segmentation.source
-      : "未接入";
+    const isChecking =
+      state.segmentationServiceState === "checking" &&
+      !(Array.isArray(state.frameMasks) && state.frameMasks.length);
+    const modelSource =
+      Array.isArray(state.frameMasks) && state.frameMasks.length
+        ? state.frameMasks[0].source
+        : null;
+    dom.segmentationSource.textContent = isChecking
+      ? "正在接入身体划分服务…"
+      : modelSource || (state.segmentation ? state.segmentation.source : "未接入");
+  }
+
+  function segmentationConfig() {
+    return Config.segmentation && Config.segmentation.auto && Config.segmentation.apiBase
+      ? Config.segmentation
+      : null;
+  }
+
+  /** 把 api_docs 的 Body Segmentation Output 归一化为内部 segmentation 对象。 */
+  function normalizeSegmentationPayload(payload) {
+    const maskRaw = payload.segmentation_mask || payload.mask || [];
+    if (!Array.isArray(maskRaw)) return null;
+    let mask;
+    if (Array.isArray(maskRaw[0])) {
+      mask = maskRaw.flat();
+    } else {
+      mask = Array.from(maskRaw);
+    }
+    if (!mask.length) return null;
+    return {
+      mask,
+      shape: payload.segmentation_shape || payload.shape,
+      labels: payload.labels || {},
+      source: payload.source || "body_segmentation",
+      demo: false,
+    };
+  }
+
+  function applySegmentationPayload(payload) {
+    const segmentation = normalizeSegmentationPayload(payload);
+    if (!segmentation) return false;
+    state.demoSegmentation = false;
+    state.segmentation = segmentation;
+    updateSegmentationSource();
+    if (state.lastRendered) {
+      updateHeatmapUI();
+    }
+    return true;
+  }
+
+  /**
+   * 当前样例一次性请求全部帧的分割掩码（内置样例 / “打开本地数据”）。
+   * 服务未启动或模型缺失时自动回退到演示矩形，不影响页面使用。
+   */
+  function fetchSegmentationForSample(sample) {
+    const cfg = segmentationConfig();
+    if (!cfg || !sample || !sample.frames || !sample.frames.length) return;
+    if (state.segmentationServiceState === "unavailable") return;
+
+    const requestId = ++state.segRequestId;
+    state.segmentationServiceState = "checking";
+    updateSegmentationSource();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 30000);
+    fetch(cfg.apiBase + "/segment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sample_id: sample.id,
+        frame_ids: sample.frames.map((frame, index) => `${sample.id}_${index}`),
+        frames: sample.frames.map((frame) => ({ pressure_matrix: frame.v })),
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (!data || !Array.isArray(data.results)) {
+          throw new Error("分割服务返回格式异常");
+        }
+        if (requestId !== state.segRequestId) return;
+        const masks = data.results
+          .map(normalizeSegmentationPayload)
+          .filter(Boolean);
+        if (!masks.length) return;
+        if (
+          state.externalMode ||
+          !state.sample ||
+          state.sample.id !== sample.id
+        ) {
+          return;
+        }
+        state.frameMasks = masks;
+        state.frameMaskSampleId = sample.id;
+        state.segmentationServiceState = "online";
+        updateSegmentationSource();
+        if (
+          state.frameMasks[state.currentFrame] &&
+          state.lastRendered &&
+          state.lastRendered.sample &&
+          state.lastRendered.sample.id === sample.id
+        ) {
+          state.segmentation = state.frameMasks[state.currentFrame];
+          state.demoSegmentation = false;
+          updateHeatmapUI();
+        }
+      })
+      .catch((error) => {
+        if (requestId !== state.segRequestId) return;
+        state.segmentationServiceState = "unavailable";
+        updateSegmentationSource();
+        if (error && error.name !== "AbortError") {
+          console.warn("身体划分服务不可用，回退演示掩码：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
+  /** 外部实时帧逐帧请求分割结果（pushFrame 模式）。 */
+  function fetchSegmentationForFrame(flat) {
+    const cfg = segmentationConfig();
+    if (!cfg || !flat || !flat.length) return;
+    if (state.segmentationServiceState !== "online") return;
+
+    const requestId = ++state.segRequestId;
+    const sampleId = state.sample && state.sample.id;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 30000);
+    fetch(cfg.apiBase + "/segment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        frame_ids: ["external_frame"],
+        frames: [{ pressure_matrix: flat }],
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || !data.results || !data.results.length) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (
+          requestId !== state.segRequestId ||
+          !state.externalMode ||
+          !state.sample ||
+          state.sample.id !== sampleId
+        ) {
+          return;
+        }
+        applySegmentationPayload(data.results[0]);
+      })
+      .catch((error) => {
+        if (requestId !== state.segRequestId) return;
+        state.segmentationServiceState = "unavailable";
+        if (error && error.name !== "AbortError") {
+          console.warn("实时身体划分请求失败：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
   }
 
   function formatTimeLabel() {
@@ -455,7 +665,7 @@
     if (!record) return;
     const history = state.history;
     history.max.push(stats.maxPressure);
-    history.mean.push(stats.meanPressure);
+    history.mean.push(stats.meanActivePressure);
     history.contact.push(stats.contactAreaPercent);
     const pointValue =
       state.selectedPoint &&
@@ -473,14 +683,62 @@
 
   function updateAirbags(flat, sample) {
     const zones = Config.airbagZones;
-    const means = zones.map((zone) =>
-      Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols)
-    );
-    const maxMean = Math.max(1, ...means);
+    const frameMax = sample && sample.max_value ? sample.max_value : Math.max(...flat, 1);
+    const presenceThreshold = Math.max(Config.contactThreshold * 5, frameMax * 0.02);
     const auto = dom.autoAirbag && dom.autoAirbag.checked;
 
-    zones.forEach((zone, index) => {
-      const target = means[index] / maxMean;
+    // 统计每个气囊分区：平均压力（区内全部传感器平均）与分区最大压力
+    const infos = zones.map((zone) => ({
+      zone,
+      mean: Metrics.rectMean(flat, Config.cols, zone.rows, zone.cols),
+      max: Metrics.rectMaxPoint(flat, Config.cols, zone.rows, zone.cols).value,
+      target: 0,
+    }));
+
+    // 按大区域（肩/背/腰/臀）分组，每组内为左/中/右三个气囊
+    const groups = new Map();
+    for (const info of infos) {
+      if (!groups.has(info.zone.bandId)) groups.set(info.zone.bandId, []);
+      groups.get(info.zone.bandId).push(info);
+    }
+
+    // 每个大区域内“压力最大的气囊”是身体真正压着的主气囊；
+    // 主气囊之间横向比较：压力越小 → 需要的支撑越高。
+    const mainByBand = new Map();
+    const mainPressures = [];
+    for (const [bandId, entries] of groups) {
+      const main = entries.reduce(
+        (best, entry) => (entry.mean > best.mean ? entry : best),
+        entries[0]
+      );
+      mainByBand.set(bandId, main);
+      if (main.max >= presenceThreshold) mainPressures.push(main.mean);
+    }
+    const maxMainPressure = Math.max(1, ...mainPressures);
+
+    for (const [bandId, entries] of groups) {
+      const main = mainByBand.get(bandId);
+      const mainHasBody = main.max >= presenceThreshold;
+      const mainSupport = mainHasBody
+        ? Math.max(0, Math.min(1, 1 - main.mean / maxMainPressure))
+        : 0;
+
+      for (const info of entries) {
+        if (info.zone.id === main.zone.id) {
+          info.target = mainSupport;
+        } else {
+          // 附属气囊仅在确实有接触时按压力比例充气，
+          // 且支撑程度不超过本大区域的主气囊。
+          const ownHasBody = info.max >= presenceThreshold;
+          const ratio = main.mean > 0 ? Math.min(1, info.mean / main.mean) : 0;
+          info.target = ownHasBody ? mainSupport * ratio : 0;
+        }
+      }
+    }
+
+    for (const info of infos) {
+      const zone = info.zone;
+      const target = info.target;
       const current = state.airbagStates[zone.id] || {
         level: 0,
         status: "stable",
@@ -500,9 +758,11 @@
               : "stable";
         current.level = next;
       }
-      current.mean = means[index];
+      current.mean = info.mean;
+      current.pressure = info.mean;
+      current.target = target;
       state.airbagStates[zone.id] = current;
-    });
+    }
 
     state.airbagSampleMax = sample ? sample.max_value : 0;
   }
@@ -528,6 +788,7 @@
       showRegions: state.showRegions,
       showAirbags: state.showAirbags,
       segmentation: state.showRegions ? state.segmentation : null,
+      showRegionLabels: state.showRegionLabels,
       selectedZone: state.selectedZoneId
         ? Config.airbagZones.find((zone) => zone.id === state.selectedZoneId)
         : null,
@@ -585,7 +846,7 @@
       ],
       {
         maxPoints: Config.historyLength,
-        xLabel: "帧（最大/平均压力 ADC，接触面指数 %）",
+        xLabel: "帧（最大压力/接触面平均压力 ADC，接触面指数 %）",
       }
     );
   }
@@ -792,27 +1053,10 @@
   /** 身体部位划分结果（docs/api_docs.md 的 Body Segmentation Output）。 */
   function setSegmentationResult(payload) {
     if (!payload) return false;
-    const maskRaw = payload.segmentation_mask || payload.mask;
-    if (!maskRaw) return false;
-
-    let mask;
-    if (Array.isArray(maskRaw[0])) {
-      mask = maskRaw.flat();
-    } else {
-      mask = Array.from(maskRaw);
-    }
-    state.demoSegmentation = false;
-    state.segmentation = {
-      mask,
-      shape: payload.segmentation_shape || payload.shape,
-      labels: payload.labels || {},
-      source: payload.source || "身体划分接口",
-      demo: false,
-    };
-    updateSegmentationSource();
-    if (state.lastRendered) {
-      updateHeatmapUI();
-    }
+    if (!applySegmentationPayload(payload)) return false;
+    // 外部推送的掩码优先于样例的逐帧缓存
+    state.frameMasks = null;
+    state.frameMaskSampleId = null;
     return true;
   }
 
@@ -844,13 +1088,16 @@
   }
 
   function applyExternalStats(stats) {
-    const mapping = [
-      ["max", "max_pressure"],
-      ["mean", "mean_pressure"],
-    ];
-    for (const [suffix, key] of mapping) {
-      const value = stats[key] ?? stats[`${suffix}Pressure`];
-      if (value != null) dom["metric" + cap(suffix)].textContent = formatMetric(value);
+    const maxValue = stats.max_pressure ?? stats.maxPressure;
+    if (maxValue != null) dom.metricMax.textContent = formatMetric(maxValue);
+    // 后端可优先提供接触面平均压力；没有时回退到全阵列平均压力
+    const meanValue =
+      stats.mean_active_pressure ??
+      stats.meanActivePressure ??
+      stats.mean_pressure ??
+      stats.meanPressure;
+    if (meanValue != null) {
+      dom.metricMean.textContent = formatMetric(meanValue);
     }
     const contact =
       stats["contact_area_index"] ?? stats.contactAreaIndex ?? stats.contactIndex;
@@ -911,6 +1158,7 @@
       true,
       state.sample
     );
+    fetchSegmentationForFrame(flat);
     updateLiveUI();
     return true;
   }

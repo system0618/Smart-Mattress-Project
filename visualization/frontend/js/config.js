@@ -4,8 +4,8 @@
  * 说明：
  * - rows/cols 来自新版 44 行 x 24 列压力传感器阵列；
  * - regions 参考新版“区域划分数据”中 5 个身体部位矩形（x 为列，y 为行）；
- * - airbagZones 为演示用虚拟分区（肩背/腰/臀/大腿 × 左/中/右）。
- *   真实“气囊-传感器 对应关系”确认后，只需在本文件替换 airbagZones。
+ * - airbagZones 为演示用虚拟分区（肩/背/腰/臀 × 左/中/右，不含大腿）。
+ *   大腿不参与气囊支撑；真实“气囊-传感器 对应关系”确认后，只需在本文件替换 airbagZones。
  */
 (function (global) {
   "use strict";
@@ -46,14 +46,22 @@
     airbagZones: buildAirbagZones(),
 
     historyLength: 120,
+
+    // 身体部位划分服务（visualization/frontend/server.py）。
+    // 服务在线时前端自动把当前帧发到 /api/segment，用 UNet 掩码替换演示矩形。
+    segmentation: {
+      auto: true,        // 探测到服务后自动请求分割结果
+      apiBase: "/api",   // file:// 直接打开时不可用，将回退到演示矩形
+      timeoutMs: 30000,
+    },
   };
 
   function buildAirbagZones() {
     const bands = [
-      { id: "upper", name: "肩背", rows: [3, 13], cols: [6, 18] },
+      { id: "shoulder", name: "肩部", rows: [3, 8], cols: [6, 18] },
+      { id: "back", name: "背部", rows: [8, 13], cols: [6, 18] },
       { id: "waist", name: "腰", rows: [13, 18], cols: [6, 18] },
       { id: "hip", name: "臀", rows: [18, 27], cols: [5, 20] },
-      { id: "thigh", name: "大腿", rows: [27, 36], cols: [5, 20] },
     ];
     const sides = ["左", "中", "右"];
     const zones = [];
