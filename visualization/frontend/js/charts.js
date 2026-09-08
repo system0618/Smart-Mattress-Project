@@ -21,6 +21,233 @@
     ctx.closePath();
   }
 
+  // ---- 区域轮廓（平滑彩色线条）----
+
+  function regionLabelColor(label) {
+    const region = Config.regions[label - 1];
+    return region ? region.color : "#94a3b8";
+  }
+
+  /** 收集某个 label 的所有边界线段（44x24 网格坐标，线段端点为整数）。 */
+  function collectBoundarySegments(mask, rows, cols, label) {
+    const edgeMap = new Map();
+    const inside = (r, c) =>
+      r >= 0 && r < rows && c >= 0 && c < cols && (mask[r * cols + c] || 0) === label;
+    const addEdge = (x1, y1, x2, y2) => {
+      const p1 = `${x1},${y1}`;
+      const p2 = `${x2},${y2}`;
+      const key = p1 < p2 ? p1 + "|" + p2 : p2 + "|" + p1;
+      if (!edgeMap.has(key)) edgeMap.set(key, [x1, y1, x2, y2]);
+    };
+
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < cols; c += 1) {
+        if (!inside(r, c)) continue;
+        if (!inside(r - 1, c)) addEdge(c, r, c + 1, r); // 上边界
+        if (!inside(r + 1, c)) addEdge(c, r + 1, c + 1, r + 1); // 下边界
+        if (!inside(r, c - 1)) addEdge(c, r, c, r + 1); // 左边界
+        if (!inside(r, c + 1)) addEdge(c + 1, r, c + 1, r + 1); // 右边界
+      }
+    }
+    return Array.from(edgeMap.values());
+  }
+
+  /** 把首尾相连的边界线段拼成封闭环。 */
+  function traceBoundaryLoops(segments) {
+    const items = segments.map((seg) => ({ x1: seg[0], y1: seg[1], x2: seg[2], y2: seg[3], used: false }));
+    const buckets = new Map();
+    const keyOf = (x, y) => `${x},${y}`;
+    for (const item of items) {
+      for (const point of [
+        [item.x1, item.y1],
+        [item.x2, item.y2],
+      ]) {
+        const key = keyOf(point[0], point[1]);
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(item);
+      }
+    }
+
+    const loops = [];
+    for (const first of items) {
+      if (first.used) continue;
+      first.used = true;
+      const points = [
+        [first.x1, first.y1],
+        [first.x2, first.y2],
+      ];
+      let curX = first.x2;
+      let curY = first.y2;
+      const startX = first.x1;
+      const startY = first.y1;
+      let guard = 0;
+      while (!(curX === startX && curY === startY)) {
+        const candidates = buckets.get(keyOf(curX, curY)) || [];
+        let next = null;
+        for (const candidate of candidates) {
+          if (candidate.used) continue;
+          if (
+            (candidate.x1 === curX && candidate.y1 === curY) ||
+            (candidate.x2 === curX && candidate.y2 === curY)
+          ) {
+            next = candidate;
+            break;
+          }
+        }
+        if (!next) break;
+        next.used = true;
+        const isFromStart = next.x1 === curX && next.y1 === curY;
+        curX = isFromStart ? next.x2 : next.x1;
+        curY = isFromStart ? next.y2 : next.y1;
+        points.push([curX, curY]);
+        guard += 1;
+        if (guard > segments.length * 4) break;
+      }
+      if (
+        points.length > 1 &&
+        points[0][0] === points[points.length - 1][0] &&
+        points[0][1] === points[points.length - 1][1]
+      ) {
+        points.pop();
+      }
+      loops.push(points);
+    }
+    return loops;
+  }
+
+  function loopCentroid(points) {
+    let x = 0;
+    let y = 0;
+    for (const point of points) {
+      x += point[0];
+      y += point[1];
+    }
+    return [x / points.length, y / points.length];
+  }
+
+  function shrinkTowardCentroid(points, factor) {
+    const [cx, cy] = loopCentroid(points);
+    return points.map((point) => [
+      cx + (point[0] - cx) * factor,
+      cy + (point[1] - cy) * factor,
+    ]);
+  }
+
+  /** Chaikin 细分平滑，把网格直角边变成圆润曲线。 */
+  function smoothClosedLoop(points, iterations) {
+    if (points.length < 3) return points;
+    let current = points;
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
+      const next = [];
+      for (let i = 0; i < current.length; i += 1) {
+        const a = current[i];
+        const b = current[(i + 1) % current.length];
+        next.push([
+          a[0] * 0.75 + b[0] * 0.25,
+          a[1] * 0.75 + b[1] * 0.25,
+        ]);
+        next.push([
+          a[0] * 0.25 + b[0] * 0.75,
+          a[1] * 0.25 + b[1] * 0.75,
+        ]);
+      }
+      current = next;
+    }
+    return current;
+  }
+
+  function isUsableLoop(points) {
+    if (points.length < 4) return false;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const point of points) {
+      minX = Math.min(minX, point[0]);
+      maxX = Math.max(maxX, point[0]);
+      minY = Math.min(minY, point[1]);
+      maxY = Math.max(maxY, point[1]);
+    }
+    const width = maxX - minX;
+    const height = maxY - minY;
+    return width >= 1.5 || height >= 1.5;
+  }
+
+  function drawRegionOutline(ctx, points, cell, color, fillAlpha) {
+    const scaled = shrinkTowardCentroid(points, 0.955);
+    const smooth = smoothClosedLoop(scaled, 2);
+    if (smooth.length < 3) return;
+    ctx.beginPath();
+    ctx.moveTo(smooth[0][0] * cell, smooth[0][1] * cell);
+    for (let i = 1; i < smooth.length; i += 1) {
+      ctx.lineTo(smooth[i][0] * cell, smooth[i][1] * cell);
+    }
+    ctx.closePath();
+    if (fillAlpha > 0) {
+      ctx.globalAlpha = fillAlpha;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
+  function labelBounds(mask, rows, cols, label) {
+    let minRow = Infinity;
+    let maxRow = -Infinity;
+    let minCol = Infinity;
+    let maxCol = -Infinity;
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < cols; c += 1) {
+        if ((mask[r * cols + c] || 0) !== label) continue;
+        minRow = Math.min(minRow, r);
+        maxRow = Math.max(maxRow, r);
+        minCol = Math.min(minCol, c);
+        maxCol = Math.max(maxCol, c);
+      }
+    }
+    if (minRow === Infinity) return null;
+    return { minRow, maxRow, minCol, maxCol };
+  }
+
+  /** 在线框左侧绘制部位名称（带深色底、部位色文字）。 */
+  function drawRegionNameLabels(ctx, mask, rows, cols, cell) {
+    const canvasWidth = ctx.canvas.width;
+    const canvasHeight = ctx.canvas.height;
+    ctx.font = "600 13px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (let label = 1; label <= Config.regions.length; label += 1) {
+      const region = Config.regions[label - 1];
+      const bounds = labelBounds(mask, rows, cols, label);
+      if (!bounds) continue;
+      const lineLeft = bounds.minCol * cell;
+      const centerY = ((bounds.minRow + bounds.maxRow + 1) / 2) * cell;
+      const textWidth = ctx.measureText(region.name).width;
+      const padX = 5;
+      const padY = 3;
+      const chipHeight = 13 + padY * 2;
+      let chipRight = Math.min(canvasWidth - 3, lineLeft - 4);
+      let chipLeft = chipRight - textWidth - padX * 2;
+      if (chipLeft < 2) {
+        chipLeft = 2;
+        chipRight = Math.min(canvasWidth - 2, chipLeft + textWidth + padX * 2);
+      }
+      const chipTop = Math.max(2, Math.min(canvasHeight - chipHeight - 2, centerY - chipHeight / 2));
+      ctx.fillStyle = "rgba(7, 13, 24, 0.78)";
+      roundRectPath(ctx, chipLeft, chipTop, chipRight - chipLeft, chipHeight, 5);
+      ctx.fill();
+      ctx.fillStyle = region.color;
+      ctx.fillText(region.name, chipLeft + padX, chipTop + chipHeight / 2);
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
   function drawHeatmap(canvas, options) {
     const {
       values,
@@ -30,6 +257,7 @@
       segmentation,
       selectedZone,
       selectedPoint,
+      showRegionLabels = true,
     } = options;
     const rows = Config.rows;
     const cols = Config.cols;
@@ -96,51 +324,19 @@
     }
 
     if (showRegions && segmentation && segmentation.mask) {
-      const colors = [
-        "",
-        "rgba(244,114,182,0.28)",
-        "rgba(167,139,250,0.28)",
-        "rgba(56,189,248,0.28)",
-        "rgba(52,211,153,0.28)",
-        "rgba(251,191,36,0.28)",
-        "rgba(251,113,133,0.28)",
-        "rgba(96,165,250,0.28)",
-      ];
       const mask = segmentation.mask;
-      for (let r = 0; r < rows; r += 1) {
-        for (let c = 0; c < cols; c += 1) {
-          const label = mask[r * cols + c] || 0;
-          if (!label) continue;
-          const color = colors[Math.min(label, colors.length - 1)];
-          ctx.fillStyle = color;
-          ctx.fillRect(c * cell, r * cell, cell + 0.5, cell + 0.5);
+      for (let label = 1; label <= Config.regions.length; label += 1) {
+        const color = regionLabelColor(label);
+        const segments = collectBoundarySegments(mask, rows, cols, label);
+        const loops = traceBoundaryLoops(segments);
+        for (const loop of loops) {
+          if (!isUsableLoop(loop)) continue;
+          drawRegionOutline(ctx, loop, cell, color, 0.16);
         }
       }
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
-      ctx.lineWidth = 1;
-      const edges = new Set();
-      for (let r = 0; r < rows; r += 1) {
-        for (let c = 0; c < cols; c += 1) {
-          const label = mask[r * cols + c] || 0;
-          if (!label) continue;
-          if (
-            r === 0 ||
-            c === 0 ||
-            (mask[(r - 1) * cols + c] || 0) !== label ||
-            (mask[(r + 1) * cols + c] || 0) !== label ||
-            (mask[r * cols + c - 1] || 0) !== label ||
-            (mask[r * cols + c + 1] || 0) !== label
-          ) {
-            edges.add(`${r},${c}`);
-          }
-        }
+      if (showRegionLabels) {
+        drawRegionNameLabels(ctx, mask, rows, cols, cell);
       }
-      ctx.beginPath();
-      for (const key of edges) {
-        const [r, c] = key.split(",").map(Number);
-        ctx.rect(c * cell + 0.5, r * cell + 0.5, cell, cell);
-      }
-      ctx.stroke();
     } else if (showRegions) {
       ctx.font = "500 12px 'Segoe UI', 'Microsoft YaHei', sans-serif";
       for (const region of Config.regions) {
@@ -155,7 +351,7 @@
         ctx.globalAlpha = 0.18;
         ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
         ctx.globalAlpha = 1;
-        if (w > 60 && h > 22) {
+        if (showRegionLabels && w > 60 && h > 22) {
           ctx.fillStyle = region.color;
           ctx.fillText(region.name, x + 5, y + 14);
         }

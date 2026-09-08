@@ -29,6 +29,7 @@
     selectedPoint: { row: 20, col: 12 },
     selectedZoneId: null,
     showRegions: true,
+    showRegionLabels: true,
     showAirbags: false,
     history: {
       max: [],
@@ -101,6 +102,7 @@
       "sensorInfo",
       "metricChart",
       "toggleRegion",
+      "toggleRegionLabels",
       "toggleAirbag",
       "autoAirbag",
       "liveDot",
@@ -201,6 +203,10 @@
     dom.toggleRegion.addEventListener("change", (event) => {
       state.showRegions = event.target.checked;
       dom.regionLegend.classList.toggle("hidden", !state.showRegions);
+      redrawLast();
+    });
+    dom.toggleRegionLabels.addEventListener("change", (event) => {
+      state.showRegionLabels = event.target.checked;
       redrawLast();
     });
     dom.toggleAirbag.addEventListener("change", (event) => {
@@ -722,6 +728,7 @@
       showRegions: state.showRegions,
       showAirbags: state.showAirbags,
       segmentation: state.showRegions ? state.segmentation : null,
+      showRegionLabels: state.showRegionLabels,
       selectedZone: state.selectedZoneId
         ? Config.airbagZones.find((zone) => zone.id === state.selectedZoneId)
         : null,
