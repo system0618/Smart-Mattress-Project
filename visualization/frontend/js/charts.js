@@ -25,7 +25,7 @@
 
   function regionLabelColor(label) {
     const region = Config.regions[label - 1];
-    return region ? region.color : "#94a3b8";
+    return region ? region.color : "#64748b";
   }
 
   /** 收集某个 label 的所有边界线段（44x24 网格坐标，线段端点为整数）。 */
@@ -409,7 +409,7 @@
       const state = states[zone.id] || { level: 0, status: "stable" };
       const active = selectedZoneId === zone.id;
 
-      ctx.fillStyle = "#0a1322";
+      ctx.fillStyle = "#ffffff";
       roundRectPath(ctx, x, y, cellW, cellH, 5);
       ctx.fill();
 
@@ -419,32 +419,107 @@
         const fillH = Math.max(3, (cellH - 3) * level);
         const color =
           state.status === "inflating"
-            ? "rgba(74,222,128,0.9)"
+            ? "rgba(5,150,105,0.9)"
             : state.status === "deflating"
-              ? "rgba(251,146,60,0.9)"
-              : "rgba(56,189,248,0.85)";
+              ? "rgba(234,88,12,0.9)"
+              : "rgba(2,132,199,0.9)";
         ctx.fillStyle = color;
         roundRectPath(ctx, x + 1.5, y + cellH - fillH + 1, cellW - 3, fillH - 2, 4);
         ctx.fill();
       }
 
-      ctx.strokeStyle = active ? "#fbbf24" : "#2b405f";
+      ctx.strokeStyle = active ? "#d97706" : "#c2d3e5";
       ctx.lineWidth = active ? 2 : 1;
       roundRectPath(ctx, x + 0.5, y + 0.5, cellW - 1, cellH - 1, 5);
       ctx.stroke();
 
-      ctx.fillStyle = "#c6d6ea";
+      ctx.fillStyle = "#334155";
       const label = active ? zone.label : zone.label.replace("·", "");
       const fontSize = cellW > 70 ? 11 : 9;
       ctx.font = `${fontSize}px 'Segoe UI', 'Microsoft YaHei', sans-serif`;
       ctx.fillText(label, x + cellW / 2, y + cellH / 2 - 5);
-      ctx.fillStyle = "#7f96b3";
+      ctx.fillStyle = "#64748b";
       ctx.font = "9px 'Segoe UI', sans-serif";
       ctx.fillText(
         `${Math.round(level * 100)}% · ${statusText(state.status)}`,
         x + cellW / 2,
         y + cellH / 2 + 6
       );
+    });
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
+  /**
+   * 气囊侧视图：按 肩/背/腰/臀 横放四个扁气囊（宽 > 高），
+   * 不画人形与气囊框线，仅用统一的 #32b5ff 填充表示实时支撑程度。
+   * 每个大区域取左/中/右分区中当前支撑程度最高的气囊作为代表。
+   */
+  function drawAirbagSideView(canvas, states) {
+    const zones = Config.airbagZones;
+    const { ctx, cssWidth, cssHeight } = prepareCanvas(canvas);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    const bands = [];
+    const bandMap = new Map();
+    for (const zone of zones) {
+      if (!bandMap.has(zone.bandId)) {
+        const band = { id: zone.bandId, name: zone.label.split("·")[0], zones: [] };
+        bandMap.set(zone.bandId, band);
+        bands.push(band);
+      }
+      bandMap.get(zone.bandId).zones.push(zone);
+    }
+    if (!bands.length) return;
+
+    const count = bands.length;
+    const marginX = 16;
+    const bagGap = 10;
+    const bagW = (cssWidth - marginX * 2 - bagGap * (count - 1)) / count;
+    const centers = [];
+    for (let i = 0; i < count; i += 1) {
+      centers.push(marginX + bagW * (i + 0.5) + bagGap * i);
+    }
+
+    const bagBottomY = cssHeight - 32;
+    const maxBagH = Math.min(64, bagBottomY - 14);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    bands.forEach((band, index) => {
+      const centerX = centers[index];
+      const bagX = centerX - bagW / 2;
+
+      let support = null;
+      for (const zone of band.zones) {
+        const current = states[zone.id] || { level: 0, status: "stable" };
+        if (!support || (current.level || 0) > (support.level || 0)) {
+          support = current;
+        }
+      }
+      support = support || { level: 0, status: "stable" };
+      const level = Math.max(0, Math.min(1, support.level || 0));
+
+      // 仅填充，不画框线；高度表示支撑程度
+      if (level > 0.02) {
+        const fillH = Math.max(4, (maxBagH - 3) * level);
+        const fillY = bagBottomY - fillH + 1;
+        ctx.fillStyle = "#32b5ff";
+        roundRectPath(ctx, bagX, fillY, bagW, fillH - 2, 8);
+        ctx.fill();
+      }
+
+      const regionName = band.name.replace(/部$/, "") || band.name;
+      const labelText = `${regionName} ${Math.round(level * 100)}%`;
+      ctx.font = "700 10px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+      const labelWidth = ctx.measureText(labelText).width;
+      ctx.fillStyle = "rgba(15,42,72,0.88)";
+      roundRectPath(ctx, centerX - labelWidth / 2 - 6, cssHeight - 21, labelWidth + 12, 15, 7);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(labelText, centerX, cssHeight - 13);
     });
 
     ctx.textAlign = "left";
@@ -473,8 +548,8 @@
     if (!maxY) maxY = 1;
 
     // 网格与纵轴
-    ctx.strokeStyle = "rgba(255,255,255,0.07)";
-    ctx.fillStyle = "#7f96b3";
+    ctx.strokeStyle = "rgba(15,42,72,0.09)";
+    ctx.fillStyle = "#64748b";
     ctx.font = "10px 'Segoe UI', sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
@@ -525,6 +600,7 @@
   global.SmartMattressCharts = {
     drawHeatmap,
     drawAirbagGrid,
+    drawAirbagSideView,
     drawLineChart,
   };
 })(window);

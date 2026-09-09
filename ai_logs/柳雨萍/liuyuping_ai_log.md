@@ -16,6 +16,68 @@
 ### 人工修改与验证
 ```
 
+## 2026-09-10
+
+### 使用工具
+
+Codex：`git`（远程同步与状态核对）、无头 Edge + 本地 HTTP（页面渲染、截图与几何测量）、
+PyMuPDF + Windows OCR（课程 PDF 第 10 页内容提取）、Node（JS 语法检查）、Python（依赖核对）。
+
+### 提问或任务
+
+1. 将 Smart-Mattress-Project 与 GitHub 远程仓库同步到本地。
+2. 明确“指标趋势”卡片中展示的指标并整卡移除。
+3. 把“数据回放控制”卡片移动到“实时压力热力图”下方，与热力图卡片同宽且紧凑无大留白。
+4. 新增“气囊侧视图”卡片：只显示肩/背/腰/臀四个气囊，支撑程度随实时数据变化；
+   样式先后参考课程 PDF 第 10 页（横躺人形 + 横放扁气囊）并最终简化为仅保留填充。
+5. 将整页切换为白天（浅色）主题，但热力图显示区域保留原深色风格。
+6. 核对 `requirements.txt` 是否需要补充依赖。
+
+### AI 输出摘要
+
+- 远程同步：当前分支 `feature/visualization` 已与远程一致；本次同步抓取到
+  `origin/main`（`582b9fa → 8f689cd`）与 `origin/feature/pressure-enhancement`
+  （`00e4dfc → 4e24aac`），无需新提交即已是最新。
+- “指标趋势”原包含最大压力、接触面平均压力、接触面指数三条曲线（由 `app.js`
+  中 `state.history.max/mean/contact` 累积），确认可去掉后整卡删除，并同步清理
+  DOM 引用、绘制调用、每帧历史记录与 CSS。
+- 布局调整：把“数据回放控制”从页面底部移入 `dashboard`，先采用 `grid-template-areas`
+  方案，但右侧列跨两行会把第二行撑高造成留白；改为 `.left-column` 纵向 flex 包装后，
+  热力图与控制卡片间距固定 16px、宽度一致，无多余空隙。
+- 新增“气囊侧视图”：读取现有 12 个气囊分区（肩/背/腰/臀 × 左/中/右）的实时状态，
+  每个大区域取当前支撑程度最高的气囊作为代表，绘制成四个横放扁气囊，高度随支撑度变化。
+  视觉迭代过程：含人形 + 框线 → 参考 PDF 第 10 页调整人形/扁气囊 → 按人工反馈移除人形
+  与气囊框线、填充统一为 `#32b5ff`、文字白色加粗，再压缩卡片空隙。
+- 主题切换：页面底色、卡片、控件、气囊/曲线等 Canvas 全部改为浅色体系；按人工反馈，
+  热力图画面恢复为原深蓝底 + 原色带，形成“白天页面 + 深色热力图”的组合；
+  侧视图白色加粗文字以深色小圆片衬底保证在浅色画布上可读。
+- `requirements.txt` 核对：代码实际 import 的 numpy/pandas/scipy/sklearn/matplotlib/
+  h5py/torch/ultralytics/tqdm 均已列出，无缺失项；torchvision/opencv-python/seaborn/
+  joblib/pytest 当前未直接使用但建议保留备用。
+
+### 采纳内容
+
+- `visualization/frontend/index.html`：移除“指标趋势”卡片；新增“气囊侧视图”卡片；
+  数据回放控制移入热力图下方；浅色主题相关页面结构。
+- `visualization/frontend/css/style.css`：dashboard 左侧列布局、气囊侧视图画布尺寸与
+  卡片间距、整页浅色配色及热力图深色区域。
+- `visualization/frontend/js/app.js`：移除指标趋势绘制与历史数组；新增侧视图 DOM/绘制
+  接入；状态色/曲线色改为浅色主题可读色。
+- `visualization/frontend/js/charts.js`：新增 `drawAirbagSideView` 及多轮样式迭代；
+  Canvas 颜色按浅色主题调整，热力图部分保留深色。
+- `visualization/frontend/README.md`：功能清单同步（指标趋势移除、侧视图说明等）。
+
+### 人工修改与验证
+
+- 每轮视觉改动均生成整页预览截图，由本人（柳雨萍）逐项确认后继续迭代
+  （去掉人形与框线、`#32b5ff` 统一填充、白色加粗文字、压缩气囊上方空隙等）。
+- 用无头 Edge 实测：控制卡片紧贴热力图下方，间距 16px，两卡宽度一致；
+  新增侧视图 Canvas 正常绘制且无脚本报错。
+- 用无头 Edge + DOM 读取确认浅色主题生效（body 背景 `rgb(238,243,249)`、画布浅色、
+  侧视图填充仍为 `#32b5ff`），热力图画面经截图人工确认为原深色风格。
+- 修改涉及的全部 JS 通过 `node --check` 语法检查；`requirements.txt` 经与代码 import
+  对照后判定无需新增依赖。以上改动均未提交/推送。
+
 ## 2026-09-08
 
 ### 使用工具
