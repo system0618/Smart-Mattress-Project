@@ -1,0 +1,12 @@
+{
+  "raw": {
+    "mpjpe_pixels": 7.17853956597417,
+    "pck_at_5_percent": 0.03632960232264965,
+    "visible_joints": 52354
+  },
+  "polished": {
+    "mpjpe_pixels": 5.745128744238815,
+    "pck_at_5_percent": 0.04511594147534095,
+    "visible_joints": 52354
+  }
+}
