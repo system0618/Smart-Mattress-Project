@@ -32,9 +32,6 @@
     showRegionLabels: true,
     showAirbags: false,
     history: {
-      max: [],
-      mean: [],
-      contact: [],
       point: [],
     },
     airbagStates: {},
@@ -107,9 +104,9 @@
       "metricCells",
       "airbagCanvas",
       "airbagLegend",
+      "airbagSideCanvas",
       "sensorChart",
       "sensorInfo",
-      "metricChart",
       "toggleRegion",
       "toggleRegionLabels",
       "toggleAirbag",
@@ -144,7 +141,7 @@
       item.dataset.zoneId = zone.id;
       const dot = document.createElement("span");
       dot.className = "dot";
-      dot.style.background = "#38bdf8";
+      dot.style.background = "#0284c7";
       const name = document.createElement("span");
       name.textContent = zone.id.replace("zone_", "Z") + " " + zone.label;
       const pct = document.createElement("span");
@@ -446,7 +443,7 @@
           ? "处于稳定睡眠状态"
           : movement.label;
     dom.sleepState.style.color =
-      meta.movement === 2 ? "#fbbf24" : meta.movement === 1 ? "#fb923c" : "#22d3ee";
+      meta.movement === 2 ? "#b45309" : meta.movement === 1 ? "#c2410c" : "#0e7490";
 
     dom.postureSource.textContent =
       (override && override.source) || meta.source || "样例标注";
@@ -664,9 +661,6 @@
   function updateHistory(flat, stats, record) {
     if (!record) return;
     const history = state.history;
-    history.max.push(stats.maxPressure);
-    history.mean.push(stats.meanActivePressure);
-    history.contact.push(stats.contactAreaPercent);
     const pointValue =
       state.selectedPoint &&
       state.selectedPoint.row >= 0 &&
@@ -799,6 +793,7 @@
 
   function drawAirbags() {
     Charts.drawAirbagGrid(dom.airbagCanvas, state.airbagStates, state.selectedZoneId);
+    Charts.drawAirbagSideView(dom.airbagSideCanvas, state.airbagStates);
     updateAirbagLegend();
   }
 
@@ -816,9 +811,9 @@
   }
 
   function statusColor(status) {
-    if (status === "inflating") return "#4ade80";
-    if (status === "deflating") return "#fb923c";
-    return "#38bdf8";
+    if (status === "inflating") return "#059669";
+    if (status === "deflating") return "#ea580c";
+    return "#0284c7";
   }
 
   function drawCharts() {
@@ -829,24 +824,11 @@
     const pointMax = Math.max(...pointValues, 0) * 1.15;
     Charts.drawLineChart(
       dom.sensorChart,
-      [{ color: "#38bdf8", values: pointValues }],
+      [{ color: "#0284c7", values: pointValues }],
       {
         maxY: pointMax || 1,
         maxPoints: Config.historyLength,
         xLabel: "帧",
-      }
-    );
-
-    Charts.drawLineChart(
-      dom.metricChart,
-      [
-        { color: "#f87171", values: state.history.max },
-        { color: "#22d3ee", values: state.history.mean },
-        { color: "#a3e635", values: state.history.contact },
-      ],
-      {
-        maxPoints: Config.historyLength,
-        xLabel: "帧（最大压力/接触面平均压力 ADC，接触面指数 %）",
       }
     );
   }
@@ -1011,7 +993,7 @@
   function showNoDataHint() {
     const message = document.createElement("div");
     message.style.cssText =
-      "padding:20px;color:#fbbf24;border:1px solid #fbbf24;border-radius:12px;margin:20px;";
+      "padding:20px;color:#92400e;border:1px solid #d97706;border-radius:12px;margin:20px;";
     message.textContent =
       "未找到内置样例数据。请运行: python visualization/frontend/tools/export_sample.py <txt 路径> 后刷新页面。";
     document.querySelector(".dashboard").prepend(message);
