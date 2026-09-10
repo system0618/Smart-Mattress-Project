@@ -54,6 +54,22 @@
       apiBase: "/api",   // file:// 直接打开时不可用，将回退到演示矩形
       timeoutMs: 30000,
     },
+
+    // 睡姿识别服务（与身体划分同一个 server.py，走 /api/posture）。
+    // 服务在线时前端自动把当前样例的每一帧送去做识别，结果覆盖文件名规则。
+    posture: {
+      auto: true,
+      apiBase: "/api",
+      timeoutMs: 30000,
+    },
+
+    // 弱力增强服务（同一个 server.py，走 /api/enhance）。
+    // 打开开关后前端把当前样例逐帧送去增强，热力图与指标改画增强结果。
+    enhance: {
+      auto: true,
+      apiBase: "/api",
+      timeoutMs: 120000,
+    },
   };
 
   function buildAirbagZones() {

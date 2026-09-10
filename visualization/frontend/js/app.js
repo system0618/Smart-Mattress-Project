@@ -43,6 +43,16 @@
     frameMasks: null, // 当前样例逐帧 UNet 掩码（与 state.segmentation 同构）
     frameMaskSampleId: null,
     segRequestId: 0,
+    postureServiceState: "offline", // offline | checking | online | unavailable
+    framePostures: null, // 当前样例逐帧睡姿识别结果（与 state.postureOverride 同构）
+    framePostureSampleId: null,
+    postureRequestId: 0,
+    enhanceOn: false, // 弱力增强开关
+    frameEnhanced: null, // 当前样例逐帧增强压力矩阵（44×24 扁平数组）
+    frameEnhancedSampleId: null,
+    enhanceServiceState: "offline", // offline | checking | online | unavailable
+    enhanceRequestId: 0,
+    enhanceSource: null,
   };
 
   function $(id) {
@@ -110,6 +120,8 @@
       "toggleRegion",
       "toggleRegionLabels",
       "toggleAirbag",
+      "toggleEnhance",
+      "enhanceSource",
       "autoAirbag",
       "liveDot",
       "liveText",
@@ -218,6 +230,15 @@
     dom.toggleAirbag.addEventListener("change", (event) => {
       state.showAirbags = event.target.checked;
       redrawLast();
+    });
+    dom.toggleEnhance.addEventListener("change", (event) => {
+      state.enhanceOn = event.target.checked;
+      updateEnhanceSource();
+      if (state.enhanceOn && state.sample) {
+        fetchEnhanceForSample(state.sample);
+      }
+      // 切换后需要整帧重绘：heatmap/metrics 都依赖传进 renderPressureData 的矩阵
+      if (state.sample) renderFrame(state.currentFrame, false);
     });
 
     dom.autoAirbag.addEventListener("change", () => {
@@ -331,6 +352,13 @@
     state.frameMasks = null;
     state.frameMaskSampleId = null;
     state.segRequestId += 1;
+    state.framePostures = null;
+    state.framePostureSampleId = null;
+    state.postureRequestId += 1;
+    state.frameEnhanced = null;
+    state.frameEnhancedSampleId = null;
+    state.enhanceRequestId += 1;
+    state.enhanceSource = null;
     if (sample.posture && sample.posture !== "unknown") {
       state.postureOverride = {
         posture: sample.posture,
@@ -351,6 +379,11 @@
     dom.frameSlider.value = 0;
     dom.colorbarMax.textContent = formatMetric(sample.max_value);
     fetchSegmentationForSample(sample);
+    fetchPostureForSample(sample);
+    if (state.enhanceOn) {
+      fetchEnhanceForSample(sample);
+    }
+    updateEnhanceSource();
     renderFrame(0, true);
     play();
   }
@@ -361,12 +394,15 @@
     const frame = sample.frames[index % sample.frames.length];
     state.currentFrame = index % sample.frames.length;
 
-    const flat = frame.v;
+    // 打开“弱力增强”且该帧已有增强结果时，热力图与指标都改用增强后的压力矩阵
+    const enhanced = enhancedFrameFor(sample, state.currentFrame);
+    const flat = enhanced || frame.v;
     const meta = {
       maxValue: sample.max_value,
       posture: sample.posture,
       movement: frame.m == null ? 0 : frame.m,
       source: sample.has_movement_label ? "动态标签" : "样例标注",
+      enhanced: Boolean(enhanced),
     };
     renderPressureData(flat, meta, record, sample);
   }
@@ -384,6 +420,8 @@
       state.selectedPoint = { row: stats.maxRow, col: stats.maxCol };
     }
 
+    // 有逐帧睡姿识别结果时，用当前帧预测覆盖文件名规则
+    applyCachedPosture(sample);
     updateMetricUI(stats);
     updateSleepUI(meta);
     updateHistory(flat, stats, record);
@@ -647,6 +685,307 @@
         state.segmentationServiceState = "unavailable";
         if (error && error.name !== "AbortError") {
           console.warn("实时身体划分请求失败：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
+  function postureConfig() {
+    return Config.posture && Config.posture.auto && Config.posture.apiBase
+      ? Config.posture
+      : null;
+  }
+
+  /** 把 /api/posture 的单帧结果归一化为内部 postureOverride 结构。 */
+  function normalizePosturePayload(payload) {
+    if (!payload) return null;
+    const raw = payload.posture || payload.sleep_pose || payload.label || "unknown";
+    const confidence = payload.confidence == null ? null : Number(payload.confidence);
+    return {
+      posture: normalizePosture(raw),
+      confidence: Number.isFinite(confidence) ? confidence : null,
+      scores: payload.scores || payload.probabilities || null,
+      source: payload.source || "睡姿识别接口",
+      demo: false,
+    };
+  }
+
+  function applyPosturePayload(payload) {
+    const result = normalizePosturePayload(payload);
+    if (!result) return false;
+    state.postureOverride = result;
+    if (state.lastRendered) {
+      updateSleepUI(state.lastRendered.meta);
+    }
+    return true;
+  }
+
+  /** 当前样例有逐帧识别结果时，用当前帧的预测覆盖文件名规则。 */
+  function applyCachedPosture(sample) {
+    if (!sample || state.framePostureSampleId !== sample.id) return;
+    if (!Array.isArray(state.framePostures)) return;
+    const result = state.framePostures[state.currentFrame];
+    if (result) {
+      state.postureOverride = result;
+    }
+  }
+
+  /**
+   * 当前样例一次性请求全部帧的睡姿识别结果（内置样例 / “打开本地数据”）。
+   * 服务未启动或模型缺失时保留文件名规则，不影响页面使用。
+   */
+  function fetchPostureForSample(sample) {
+    const cfg = postureConfig();
+    if (!cfg || !sample || !sample.frames || !sample.frames.length) return;
+    if (state.postureServiceState === "unavailable") return;
+
+    const requestId = ++state.postureRequestId;
+    state.postureServiceState = "checking";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 30000);
+    fetch(cfg.apiBase + "/posture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sample_id: sample.id,
+        frame_ids: sample.frames.map((frame, index) => `${sample.id}_${index}`),
+        frames: sample.frames.map((frame) => ({ pressure_matrix: frame.v })),
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (!data || !Array.isArray(data.results)) {
+          throw new Error("睡姿识别服务返回格式异常");
+        }
+        if (requestId !== state.postureRequestId) return;
+        const results = data.results.map(normalizePosturePayload).filter(Boolean);
+        if (!results.length) return;
+        if (state.externalMode || !state.sample || state.sample.id !== sample.id) {
+          return;
+        }
+        state.framePostures = results;
+        state.framePostureSampleId = sample.id;
+        state.postureServiceState = "online";
+        if (
+          state.framePostures[state.currentFrame] &&
+          state.lastRendered &&
+          state.lastRendered.sample &&
+          state.lastRendered.sample.id === sample.id
+        ) {
+          state.postureOverride = state.framePostures[state.currentFrame];
+          updateSleepUI(state.lastRendered.meta);
+        }
+      })
+      .catch((error) => {
+        if (requestId !== state.postureRequestId) return;
+        state.postureServiceState = "unavailable";
+        if (error && error.name !== "AbortError") {
+          console.warn("睡姿识别服务不可用，保留文件名规则：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
+  /** 外部实时帧逐帧请求睡姿识别（pushFrame 模式）。 */
+  function fetchPostureForFrame(flat) {
+    const cfg = postureConfig();
+    if (!cfg || !flat || !flat.length) return;
+    if (state.postureServiceState !== "online") return;
+
+    const requestId = ++state.postureRequestId;
+    const sampleId = state.sample && state.sample.id;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 30000);
+    fetch(cfg.apiBase + "/posture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        frame_ids: ["external_frame"],
+        frames: [{ pressure_matrix: flat }],
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || !data.results || !data.results.length) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (
+          requestId !== state.postureRequestId ||
+          !state.externalMode ||
+          !state.sample ||
+          state.sample.id !== sampleId
+        ) {
+          return;
+        }
+        applyPosturePayload(data.results[0]);
+      })
+      .catch((error) => {
+        if (requestId !== state.postureRequestId) return;
+        state.postureServiceState = "unavailable";
+        if (error && error.name !== "AbortError") {
+          console.warn("实时睡姿识别请求失败：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
+  function enhanceConfig() {
+    return Config.enhance && Config.enhance.auto && Config.enhance.apiBase
+      ? Config.enhance
+      : null;
+  }
+
+  function updateEnhanceSource() {
+    if (!dom.enhanceSource) return;
+    if (!state.enhanceOn) {
+      dom.enhanceSource.textContent = "未开启";
+      return;
+    }
+    if (state.enhanceServiceState === "checking") {
+      dom.enhanceSource.textContent = "增强中…";
+      return;
+    }
+    if (
+      Array.isArray(state.frameEnhanced) &&
+      state.sample &&
+      state.frameEnhancedSampleId === state.sample.id
+    ) {
+      dom.enhanceSource.textContent = state.enhanceSource || "已增强";
+      return;
+    }
+    dom.enhanceSource.textContent =
+      state.enhanceServiceState === "unavailable" ? "服务不可用" : "等待结果";
+  }
+
+  /** 取当前帧的增强压力矩阵；未开启开关或该帧没有结果时返回 null。 */
+  function enhancedFrameFor(sample, index) {
+    if (!state.enhanceOn || !sample) return null;
+    if (!Array.isArray(state.frameEnhanced)) return null;
+    if (state.frameEnhancedSampleId !== sample.id) return null;
+    return state.frameEnhanced[index] || null;
+  }
+
+  function flattenMatrix(matrix) {
+    if (!Array.isArray(matrix) || !matrix.length) return null;
+    return Array.isArray(matrix[0]) ? matrix.flat() : Array.from(matrix);
+  }
+
+  /** 把 /api/enhance 的单帧结果归一化为内部结构。 */
+  function normalizeEnhancePayload(payload) {
+    if (!payload) return null;
+    const flat = flattenMatrix(
+      payload.enhanced_matrix || payload.enhancedMatrix || payload.matrix
+    );
+    if (!flat || !flat.length) return null;
+    return {
+      flat,
+      source: payload.source || "弱力增强",
+      stats: payload.enhanced_stats || null,
+    };
+  }
+
+  /**
+   * 当前样例一次性请求全部帧的增强结果（内置样例 / “打开本地数据”）。
+   * 服务未启动或模型缺失时保持原始热力图，不影响页面使用。
+   */
+  function fetchEnhanceForSample(sample) {
+    const cfg = enhanceConfig();
+    if (!cfg || !sample || !sample.frames || !sample.frames.length) return;
+    if (state.enhanceServiceState === "unavailable") return;
+
+    const requestId = ++state.enhanceRequestId;
+    state.enhanceServiceState = "checking";
+    updateEnhanceSource();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 120000);
+    fetch(cfg.apiBase + "/enhance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sample_id: sample.id,
+        frame_ids: sample.frames.map((frame, index) => `${sample.id}_${index}`),
+        frames: sample.frames.map((frame) => ({ pressure_matrix: frame.v })),
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (!data || !Array.isArray(data.results)) {
+          throw new Error("增强服务返回格式异常");
+        }
+        if (requestId !== state.enhanceRequestId) return;
+        const results = data.results.map(normalizeEnhancePayload).filter(Boolean);
+        if (!results.length) throw new Error("增强服务未返回可用结果");
+        if (state.externalMode || !state.sample || state.sample.id !== sample.id) {
+          return;
+        }
+        state.frameEnhanced = results.map((item) => item.flat);
+        state.frameEnhancedSampleId = sample.id;
+        state.enhanceSource = results[0].source;
+        state.enhanceServiceState = "online";
+        updateEnhanceSource();
+        renderFrame(state.currentFrame, false);
+      })
+      .catch((error) => {
+        if (requestId !== state.enhanceRequestId) return;
+        state.enhanceServiceState = "unavailable";
+        updateEnhanceSource();
+        if (error && error.name !== "AbortError") {
+          console.warn("弱力增强服务不可用，保留原始热力图：", error.message);
+        }
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
+  /** 外部实时帧逐帧请求增强（pushFrame 模式）。 */
+  function fetchEnhanceForFrame(flat) {
+    const cfg = enhanceConfig();
+    if (!cfg || !state.enhanceOn || !flat || !flat.length) return;
+    if (state.enhanceServiceState === "unavailable") return;
+
+    const requestId = ++state.enhanceRequestId;
+    const sampleId = state.sample && state.sample.id;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs || 120000);
+    fetch(cfg.apiBase + "/enhance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        frame_ids: ["external_frame"],
+        frames: [{ pressure_matrix: flat }],
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || !data.results || !data.results.length) {
+          throw new Error((data && data.error) || "HTTP " + response.status);
+        }
+        if (requestId !== state.enhanceRequestId || !state.externalMode) return;
+        if (!state.sample || state.sample.id !== sampleId) return;
+        const result = normalizeEnhancePayload(data.results[0]);
+        if (!result) return;
+        state.frameEnhanced = [result.flat];
+        state.frameEnhancedSampleId = state.sample.id;
+        state.enhanceSource = result.source;
+        state.enhanceServiceState = "online";
+        updateEnhanceSource();
+        renderFrame(0, false);
+      })
+      .catch((error) => {
+        if (requestId !== state.enhanceRequestId) return;
+        state.enhanceServiceState = "unavailable";
+        updateEnhanceSource();
+        if (error && error.name !== "AbortError") {
+          console.warn("实时弱力增强请求失败：", error.message);
         }
       })
       .finally(() => clearTimeout(timer));
@@ -1017,19 +1356,7 @@
 
   /** 睡姿识别结果（docs/api_docs.md 的 Posture Recognition Output）。 */
   function setPostureResult(payload) {
-    if (!payload) return false;
-    const posture = normalizePosture(
-      payload.posture || payload.sleep_pose || payload.label || "unknown"
-    );
-    state.postureOverride = {
-      posture,
-      confidence: payload.confidence,
-      source: payload.source || "睡姿识别接口",
-    };
-    if (state.lastRendered) {
-      updateSleepUI(state.lastRendered.meta);
-    }
-    return true;
+    return applyPosturePayload(payload);
   }
 
   /** 身体部位划分结果（docs/api_docs.md 的 Body Segmentation Output）。 */
@@ -1141,6 +1468,8 @@
       state.sample
     );
     fetchSegmentationForFrame(flat);
+    fetchPostureForFrame(flat);
+    fetchEnhanceForFrame(flat);
     updateLiveUI();
     return true;
   }

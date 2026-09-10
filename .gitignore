@@ -32,8 +32,10 @@ data/processed/*
 *.joblib
 
 # Model artifacts
+checkpoints/
 src/**/models/*
 !src/**/models/.gitkeep
+!src/**/models/README.md
 *.pt
 *.pth
 *.onnx
