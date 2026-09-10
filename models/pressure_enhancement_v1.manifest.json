@@ -1,0 +1,30 @@
+{
+  "artifact_type": "pressure_enhancement_inference",
+  "format_version": 1,
+  "model": "PaperPolishNetU",
+  "base_channels": 24,
+  "input": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "Viridis RGB in [0, 1]"
+  },
+  "output": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "uint8 Viridis RGB"
+  },
+  "source_training_checkpoint": "paper_polish_joint_target_final.pt",
+  "training_epoch": 40,
+  "method": "retrained_pose_plus_finetuned_polishnetu",
+  "artifact_file": "pressure_enhancement_v1.pt",
+  "sha256": "0bb048f2f2931c53ef9f7cc210837f9b0e1b86ad6073096dcdba0991c352f002",
+  "bytes": 53155980
+}
