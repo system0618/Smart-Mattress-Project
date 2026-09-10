@@ -35,7 +35,7 @@ class AnnotatedPoseDataset(Dataset):
         self.path = str(path)
         self._file: h5py.File | None = None
         with h5py.File(self.path, "r") as file:
-            for key in ("input_images", "joints", "joint_valid"):
+            for key in ("input_images", "target_images", "body_mask", "joints", "joint_valid"):
                 if key not in file:
                     raise KeyError(f"{self.path} lacks required dataset '{key}'")
             available = len(file["input_images"])
@@ -49,15 +49,18 @@ class AnnotatedPoseDataset(Dataset):
             self._file = h5py.File(self.path, "r")
         return self._file
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         file = self._open()
         image = np.asarray(file["input_images"][index], dtype=np.float32)
         if image.ndim != 3 or image.shape[-1] != 3:
             raise ValueError(f"Expected HWC RGB image, got {image.shape}")
         image_tensor = torch.from_numpy(image.copy()).permute(2, 0, 1) * 2.0 - 1.0
+        target = np.asarray(file["target_images"][index], dtype=np.float32)
+        target_tensor = torch.from_numpy(target.copy()).permute(2, 0, 1) * 2.0 - 1.0
+        body_mask = torch.from_numpy(np.asarray(file["body_mask"][index], dtype=np.float32).copy())
         joints = torch.from_numpy(np.asarray(file["joints"][index], dtype=np.float32))
         valid = torch.from_numpy(np.asarray(file["joint_valid"][index], dtype=np.float32))
-        return image_tensor, joints, valid
+        return image_tensor, target_tensor, body_mask, joints, valid
 
     def __del__(self) -> None:
         if self._file is not None:
@@ -249,14 +252,17 @@ def pose_objective(
 
 def paper_objective(
     polished: torch.Tensor,
-    pressure: torch.Tensor,
+    target: torch.Tensor,
+    body_mask: torch.Tensor,
     pose_outputs: Iterable[tuple[torch.Tensor, torch.Tensor]],
     joints: torch.Tensor,
     valid: torch.Tensor,
     pixel_weight: float,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     pose_loss, parts = pose_objective(pose_outputs, joints, valid)
-    pixel_loss = nn.functional.mse_loss(polished, pressure)
+    error = (polished - target).square().mean(dim=1, keepdim=True)
+    region = body_mask[:, None] if body_mask.ndim == 3 else body_mask
+    pixel_loss = ((1.0 + 2.0 * region.clamp(0.0, 1.0)) * error).mean()
     total = pose_loss + pixel_weight * pixel_loss
     parts["pixel"] = pixel_loss.detach()
     return total, parts
@@ -305,7 +311,7 @@ def train_pose(
     for epoch in range(epochs):
         model.train()
         running = 0.0
-        for image, joints, valid in tqdm(loader, desc=f"pose {epoch + 1}/{epochs}", unit="batch"):
+        for image, _, _, joints, valid in tqdm(loader, desc=f"pose {epoch + 1}/{epochs}", unit="batch"):
             image, joints, valid = image.to(device), joints.to(device), valid.to(device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast("cuda", dtype=torch.float16, enabled=device.type == "cuda"):
@@ -364,12 +370,13 @@ def train_polish(
         polish.train()
         pixel_weight = 1.0 + (0.01 - 1.0) * epoch / max(epochs - 1, 1)
         running = 0.0
-        for image, joints, valid in tqdm(loader, desc=f"polish {epoch + 1}/{epochs}", unit="batch"):
-            image, joints, valid = image.to(device), joints.to(device), valid.to(device)
+        for image, target, body_mask, joints, valid in tqdm(loader, desc=f"polish {epoch + 1}/{epochs}", unit="batch"):
+            image, target, body_mask = image.to(device), target.to(device), body_mask.to(device)
+            joints, valid = joints.to(device), valid.to(device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast("cuda", dtype=torch.float16, enabled=device.type == "cuda"):
                 polished = polish(image)
-                loss, _ = paper_objective(polished, image, pose(polished), joints, valid, pixel_weight)
+                loss, _ = paper_objective(polished, target, body_mask, pose(polished), joints, valid, pixel_weight)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -415,12 +422,13 @@ def finetune(
         polish.train(); pose.train()
         pixel_weight = 1.0 + (0.01 - 1.0) * epoch / max(epochs - 1, 1)
         running = 0.0
-        for image, joints, valid in tqdm(loader, desc=f"joint {epoch + 1}/{epochs}", unit="batch"):
-            image, joints, valid = image.to(device), joints.to(device), valid.to(device)
+        for image, target, body_mask, joints, valid in tqdm(loader, desc=f"joint {epoch + 1}/{epochs}", unit="batch"):
+            image, target, body_mask = image.to(device), target.to(device), body_mask.to(device)
+            joints, valid = joints.to(device), valid.to(device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast("cuda", dtype=torch.float16, enabled=device.type == "cuda"):
                 polished = polish(image)
-                loss, _ = paper_objective(polished, image, pose(polished), joints, valid, pixel_weight)
+                loss, _ = paper_objective(polished, target, body_mask, pose(polished), joints, valid, pixel_weight)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -474,7 +482,7 @@ def evaluate(
         "raw": {"distance": 0.0, "correct": 0.0, "count": 0.0},
         "polished": {"distance": 0.0, "correct": 0.0, "count": 0.0},
     }
-    for image, joints, valid in tqdm(loader, desc="paper evaluation", unit="batch"):
+    for image, _, _, joints, valid in tqdm(loader, desc="paper evaluation", unit="batch"):
         image, joints, valid = image.to(device), joints.to(device), valid.to(device).bool()
         for name, current in (("raw", image), ("polished", polish(image))):
             heatmap = _flip_test_heatmaps(pose, current)
@@ -531,7 +539,7 @@ def export(
             chunks=(min(batch_size, shape[0]), *shape[1:]), compression="gzip",
         )
         offset = 0
-        for batch, _, _ in tqdm(loader, desc="export paper enhancement", unit="batch"):
+        for batch, _, _, _, _ in tqdm(loader, desc="export paper enhancement", unit="batch"):
             prediction = model(batch.to(device))
             rgb = ((prediction + 1.0) * 127.5).clamp(0, 255).byte().permute(0, 2, 3, 1).cpu().numpy()
             images[offset:offset + len(rgb)] = rgb

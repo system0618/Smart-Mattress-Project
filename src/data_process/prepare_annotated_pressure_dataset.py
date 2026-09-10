@@ -155,7 +155,7 @@ def prepare(
     global_low = 0.0
     global_high = float(np.percentile(calibration_values, 99.5))
 
-    def filtered_sequences(selected_records: list[dict]) -> list[tuple[np.ndarray, dict]]:
+    def filtered_sequences(selected_records: list[dict]) -> list[tuple[np.ndarray, np.ndarray, dict]]:
         """Apply the paper's 3x3x3 filter and remove 3 transition frames."""
         sequences: dict[tuple[str, str], list[dict]] = defaultdict(list)
         for current in selected_records:
@@ -168,7 +168,16 @@ def prepare(
                 continue
             sequence = np.stack([parse_pressure(item) for item in sequence_records])
             denoised = median_filter(sequence, size=(3, 3, 3), mode="nearest")
-            result.extend((denoised[index], sequence_records[index]) for index in range(3, len(sequence_records)))
+            # Build a pressure-domain target from the same pose sequence. The
+            # median removes transient sensor spikes; the upper quantile keeps
+            # weak, stable contacts that a median alone can erase.
+            stable = np.median(denoised[3:], axis=0)
+            upper = np.percentile(denoised[3:], 75.0, axis=0)
+            robust_target = 0.7 * stable + 0.3 * upper
+            result.extend(
+                (denoised[index], robust_target, sequence_records[index])
+                for index in range(3, len(sequence_records))
+            )
         return result
 
     manifest = {
@@ -187,13 +196,16 @@ def prepare(
             raise ValueError(f"no usable sequences in {split} split after removing transition frames")
         images, targets, masks, joints, valid_joints = [], [], [], [], []
         kept_records: list[dict] = []
-        for denoised, record in filtered:
+        for denoised, robust_target, record in filtered:
             mask = annotation_mask(record)
             images.append(viridis_rgb(denoised, global_low, global_high))
-            targets.append(enhanced_target_rgb(
-                denoised, mask, global_low, global_high,
-                target_enhancement_strength, zero_pressure_floor,
-            ))
+            if target_enhancement_strength or zero_pressure_floor:
+                targets.append(enhanced_target_rgb(
+                    robust_target, mask, global_low, global_high,
+                    target_enhancement_strength, zero_pressure_floor,
+                ))
+            else:
+                targets.append(viridis_rgb(robust_target, global_low, global_high))
             masks.append(mask)
             kept_records.append(record)
             points = np.full((14, 2), np.nan, dtype=np.float32)
@@ -218,6 +230,7 @@ def prepare(
             file.attrs["preprocessing"] = "3x3x3 spatio-temporal median; first 3 frames removed"
             file.attrs["viridis_low"] = global_low
             file.attrs["viridis_high"] = global_high
+            file.attrs["target_definition"] = "0.7 temporal median + 0.3 temporal 75th percentile after 3x3x3 median filter"
             file.attrs["target_enhancement_strength"] = target_enhancement_strength
             file.attrs["zero_pressure_floor"] = zero_pressure_floor
         manifest[f"{split}_samples"] = len(kept_records)
