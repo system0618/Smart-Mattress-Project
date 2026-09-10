@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 
-POSTURE_NAMES = ("supine", "prone", "left_extended", "left_fetal", "right_extended", "right_fetal")
+# 标签语义来自采集协议（见 `图片和附件/睡姿采集2026.docx` 与区域划分 data.json）：
+#   0 动作 1-6 仰卧类 / 1 动作 7-9 俯卧类 / 2 动作 10-15 左侧卧类 / 3 动作 16-21 右侧卧类
+# 参考论文最多 6 类，当前数据集只有前 4 类；5、6 类没有样本，不虚构名称。
+POSTURE_NAMES = ("supine", "prone", "left_lateral", "right_lateral", "unknown_4", "unknown_5")
 HEIGHT, WIDTH = 44, 24
 
 @dataclass(frozen=True)

@@ -78,6 +78,109 @@ PyMuPDF + Windows OCR（课程 PDF 第 10 页内容提取）、Node（JS 语法�
 - 修改涉及的全部 JS 通过 `node --check` 语法检查；`requirements.txt` 经与代码 import
   对照后判定无需新增依赖。以上改动均未提交/推送。
 
+## 2026-09-10（第二次会话：睡姿识别与弱力增强接入）
+
+### 使用工具
+
+Codex：`git`（fetch / 快进同步 / 分支与 tag 核对 / 指定路径取文件）、GitHub API 与
+Release 附件下载、Python（PyTorch CPU 推理、HDF5、SHA-256 与指标复算、matplotlib
+Viridis 上色）、Node（JS 语法检查与非浏览器 DOM 桩跑通前端逻辑）、无头 Edge
+（尝试页面渲染，未取到输出后改用 DOM 桩）、PowerShell（服务进程与端口清理）。
+
+### 提问或任务
+
+1. 把远端 `main` 同步到本地。
+2. 明确弱力增强与睡姿识别两个模型是否已有权重，并把它们接入可视化。
+3. 先做睡姿识别接入。
+4. 盘点弱力增强还缺哪些文件；确认有权重后能否直接推理。
+5. 检查 GitHub Release 上的弱力增强整合包。
+6. 用提供的 `pressure_enhancement_models.zip` 完成接入，并按要求把默认模型换成
+   `annotated_pressure_strong_v0.pt`。
+7. 再次从远端同步（弱力增强有更新），并按第 2 方案实现门控融合模式。
+8. 一并更正睡姿类别命名不一致的问题。
+
+### AI 输出摘要
+
+- 远程同步：`main` 先由 `d02318d` 快进到 `7a1a69e`（29 个提交，PR #9），后续又同步到
+  `cd2b536`（PR #11）与 `74ae2e6`（PR #12）；顺带同步了 `feature/posture-recognition`
+  与 `feature/pressure-enhancement`。仓库目录存在 Git 所有权告警（目录属主与沙箱账户
+  不同），改用单次命令参数 `safe.directory` 解决，未改动全局配置。
+- 睡姿识别接入：从 `origin/feature/posture-recognition` 取回 `cnn.pt`(0.1 MB)、
+  `random_forest.joblib`(7.0 MB)、`svm.joblib`(0.44 MB) 及配套代码；新增
+  `src/posture_recognition/infer.py`（单帧/多帧推理、按分类头形状推断类别数、CLI 自测）；
+  `server.py` 新增 `POST /api/posture` 与 `GET /api/posture/status`；前端加载样例后自动
+  逐帧识别并覆盖文件名规则。复现测试集准确率 98.66%（3942 帧、20 位受试者按人划分），
+  与分支记录一致，`dgs_1/7/10/16` 四组 150 帧全部命中。
+- 类别命名修正：核对 `睡姿采集2026.docx` 与 `data.json` 的 `action → sleep_pos`
+  （动作 1–6→0、7–9→1、10–15→2、16–21→3），确认标签 2/3 是左侧卧/右侧卧，而不是分支
+  代码里的 `left_extended`/`left_fetal`，统一为 `supine/prone/left_lateral/right_lateral`。
+- 弱力增强盘点：仓库与磁盘上都没有增强权重，Release `pressure-enhancement-v1.0`
+  的 assets 数为 0（只挂了 7 个 manifest 与 README）；确认需要「权重 + 配套代码 +
+  训练色标范围」三样才能直接推理，且论文流程与早期基线两种权重格式不通用。
+- 权重落地：解压 `pressure_enhancement_models.zip` 到 `models/`，7 个 `.pt`
+  逐个核对字节数与 SHA-256，全部与 manifest 匹配；从 `main` 取回 `paper_pipeline.py`
+  等配套代码。
+- 端到端跑通：用现有 `睡姿数据` 造出模型要求的 `(312, 24, 44, 3)` Viridis RGB 输入 H5
+  （色标 `0–300`，与训练用的 99.5 分位一致，也与前端色标一致），CPU 上 312 帧约 3 秒；
+  `paper_pipeline export` 产出增强 H5 与对比图。实测增强与输入相关性 0.96，横向相邻差
+  0.0478 → 0.0321，属细节平滑而非重绘。
+- 换用 `annotated_pressure_strong_v0.pt`：`server.py` 改为自动识别两种发布格式
+  （`polish_state_dict`+`PaperPolishNetU` / `model_state_dict`+`PolishNetU`），默认模型
+  切到 strong_v0。312 帧实测：strong_v0 整体 +20.75、弱压区 +36.55、强压区 +45.02、
+  背景 +6.20、相邻差升到 15.97；v1 整体 +0.57、弱压区 −2.28、相邻差降到 10.90。
+- 门控融合模式（第 2 方案）：新增 `--enhance-mode gated`，同时加载 v1 结构分支与
+  strong 强增强分支（都用原始帧，不做级联），在归一化压力空间取加权残差、只保留正向
+  增益并限幅，再用压力自身构造的软掩膜门控（5×5 最大值滤波 + 高斯 + 阈值 + 弱压加权），
+  门控外逐像素保持原值。第一版门控半径过小导致强压区被抬得比弱压区还多，定位到本批
+  数据存在约 14 ADC 床垫底噪后改为「局部覆盖度 + 弱压优先」。调参后 312 帧：门控覆盖
+  0.24、22.9% 像素门控严格为 0、整体 +11.9、弱压区 +22.4、强压区 +20.0、相邻差
+  14.06 → 14.09，比单用 strong 模型更保守且不放大噪点。
+- 门控模式的上游依据：同步了 PR #12 新增的 `ensemble_enhance_raw_sleep.py`，其思路是
+  用真实 14 关节掩膜限制正向残差；因实时帧无关节标注，服务端用压力软掩膜做近似，
+  并用我们的 `data.json`（无 kpts，回退 region/spine 门控）跑过 64 帧烟雾测试：
+  门控内 +0.0724、门控外约 3e-6。
+- 命名更正落地：`src/posture_recognition/models/README.md` 类别表与示例代码、三个
+  `*_split.json` 的 `classes`、`cnn_test_metrics.json` 的 `class_names` 与分类报告键
+  全部改为新命名；该 metrics 文件原本是 UTF-16（当年用 PowerShell 重定向写出），
+  一并转为 UTF-8。
+
+### 采纳内容
+
+- `src/posture_recognition/infer.py`（新增）、`dataset.py`（类别命名）、
+  `models/README.md`、`models/*_split.json`、`models/cnn_test_metrics.json`，
+  以及从睡姿分支取回的 `models.py`、`features.py`、`train.py`、`evaluate.py` 与三个模型权重。
+- `src/pressure_enhancement/`：`paper_pipeline.py`、`infer.py`、`train_annotated.py`、
+  `enhance_raw_sleep_heatmaps.py`、`evaluate_denoising.py`、`visualize_enhancement.py`、
+  `ensemble_enhance_raw_sleep.py`、`enhance.py`、`utils.py`、`README.md`；
+  `src/data_process/prepare_annotated_pressure_dataset.py` 与 README。
+- `models/`：7 个发布权重的 manifest 与 README（`.pt` 被 `.gitignore` 排除，仅本地保留）；
+  `reports/paper_target_metrics.json`。
+- `visualization/frontend/server.py`：`PostureService`、`EnhanceService`（单模型与门控两种
+  模式、两种权重格式自动识别）、`POST /api/posture`、`POST /api/enhance` 及两个状态接口。
+- `visualization/frontend/js/config.js`、`js/app.js`、`index.html`：睡姿识别与弱力增强的
+  自动请求、逐帧缓存、来源显示与“弱力增强”开关。
+- `docs/api_docs.md`：新增 Local Posture Bridge 与 Local Enhancement Bridge 章节；
+  `.gitignore`：补充 `checkpoints/` 与 `!src/**/models/README.md`。
+
+### 人工修改与验证
+
+- 权重可信度：7 个 `.pt` 的 SHA-256 与字节数全部与 manifest 一致；未改写任何二进制
+  训练产物。
+- 睡姿识别：用真实测试集重跑推理复现 accuracy 0.986555、混淆矩阵与记录一致；
+  更正命名后再次复算，数值未变。
+- 弱力增强：真实模型 + 真实帧端到端跑通（312 帧约 3 秒），生成前后对比图
+  （`压力增强对比图/部署结果/`）由人工查看确认；单模型模式在重构前后输出逐像素比对
+  最大差为 0，确认改动未破坏原有行为。
+- 前端：JS 全部通过 `node --check`；用 Node 挂 DOM 桩完整跑通 `app.js`，确认初始化会
+  调用 `/api/segment` 与 `/api/posture`，打开“弱力增强”开关后调用 `/api/enhance` 且
+  指标切换到增强矩阵，关闭后回到原始矩阵。
+- 过程清理：排查时发现两个残留服务进程占用同一端口（Windows 允许重复绑定，导致请求
+  随机落到旧进程），已按端口定位并结束，测试端口均已释放。
+- 已知限制（如实记录）：无关节标注时门控只能保证远离人体的背景不变，靠近人体的床垫
+  底噪仍会被轻微抬升（5–15 ADC 区间平均 +5.7）；要与论文结果严格对齐，仍需使用带真实
+  关节标注的 `ensemble_enhance_raw_sleep.py` 离线生成 HDF5。
+- 以上改动均未提交/推送。
+
 ## 2026-09-08
 
 ### 使用工具

@@ -35,6 +35,7 @@ data/processed/*
 checkpoints/
 src/**/models/*
 !src/**/models/.gitkeep
+!src/**/models/README.md
 *.pt
 *.pth
 *.onnx

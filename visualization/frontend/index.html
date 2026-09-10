@@ -27,6 +27,7 @@
             <label><input type="checkbox" id="toggleRegion" checked> 区域划分结果</label>
             <label><input type="checkbox" id="toggleRegionLabels" checked> 部位名称</label>
             <label><input type="checkbox" id="toggleAirbag"> 气囊分区</label>
+            <label title="用 PolishNetU 发布模型增强弱压力区域（热力图与指标切换到增强结果）"><input type="checkbox" id="toggleEnhance"> 弱力增强</label>
           </div>
         </div>
         <div id="heatmapWrap">
@@ -86,6 +87,7 @@
             <span>识别来源 <b id="postureSource">样例标注</b></span>
             <span>置信度 <b id="postureConfidence">--</b></span>
             <span>身体区域 <b id="segmentationSource">未接入</b></span>
+            <span>弱力增强 <b id="enhanceSource">未开启</b></span>
             <span>当前帧 <b id="frameInfo">-- / --</b></span>
           </div>
         </div>
@@ -139,8 +141,11 @@
   </main>
 
   <footer class="app-footer">
-    本地演示：选择一个 txt 数据组，睡姿/身体划分结果可通过 <code>SmartMattressViewer.setPostureResult()</code>、
-    <code>setSegmentationResult()</code> 等预设接口推送，热力图色标固定 0–300。
+    本地演示：选择一个 txt 数据组；先运行 <code>python visualization/frontend/server.py</code>，
+    睡姿识别与身体划分会自动调用本机模型（“识别来源/身体区域”会标明模型），
+    未启动服务时回退到样例标注与区域矩形，也可用
+    <code>SmartMattressViewer.setPostureResult()</code>、<code>setSegmentationResult()</code>
+    手动推送。热力图色标固定 0–300。
   </footer>
 
   <script src="data/samples.js"></script>
