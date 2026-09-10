@@ -10,5 +10,6 @@ torchvision>=0.18
 h5py>=3.10
 ultralytics>=8.3
 tqdm>=4.66
+controlnet-aux>=0.0.10
 joblib>=1.4
 pytest>=8.2
