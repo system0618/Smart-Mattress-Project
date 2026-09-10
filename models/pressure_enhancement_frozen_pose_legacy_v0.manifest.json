@@ -18,13 +18,13 @@
     ],
     "encoding": "uint8 Viridis RGB"
   },
-  "source_training_checkpoint": "paper_polish_joint_target_final.pt",
+  "source_training_checkpoint": "paper_polish_frozen_pose.pt",
   "training_epoch": 40,
   "artifact_type": "pressure_enhancement_inference",
   "model": "PaperPolishNetU",
   "base_channels": 24,
-  "method": "retrained_pose_plus_finetuned_polishnetu",
-  "artifact_file": "pressure_enhancement_v1.pt",
-  "sha256": "c28c6f29df0364050f976e5f6e35cad7363c4c4a516dc65f30637987fdfdb40c",
-  "bytes": 53155980
+  "method": "frozen_pretrained_pose_plus_polishnetu",
+  "artifact_file": "pressure_enhancement_frozen_pose_legacy_v0.pt",
+  "sha256": "a5a74f8741cbee333cc067c768ef2b1bcd391d993cef6037778b65d267bd51bb",
+  "bytes": 53158793
 }

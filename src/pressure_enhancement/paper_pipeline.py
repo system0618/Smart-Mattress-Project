@@ -563,25 +563,46 @@ def package_model(
     output_checkpoint: str | Path,
     manifest_path: str | Path | None = None,
 ) -> Path:
-    """Create a compact inference artifact without OpenPose or optimizer state."""
+    """Create a compact inference artifact without OpenPose or optimizer state.
+
+    Both paper-pipeline checkpoints and the earlier ``PolishNetU`` checkpoints
+    are supported.  The latter are retained as reproducible baselines and are
+    exported with the same self-describing metadata as the recommended model.
+    """
     source = Path(input_checkpoint)
     state = torch.load(source, map_location="cpu", weights_only=False)
-    if "polish_state_dict" not in state:
-        raise KeyError(f"{source} is not a PaperPolishNetU training checkpoint")
     destination = Path(output_checkpoint)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    artifact = {
-        "artifact_type": "pressure_enhancement_inference",
+    common = {
         "format_version": 1,
-        "model": "PaperPolishNetU",
-        "base_channels": int(state.get("base_channels", 24)),
         "input": {"layout": "NHWC", "shape": [24, 44, 3], "encoding": "Viridis RGB in [0, 1]"},
         "output": {"layout": "NHWC", "shape": [24, 44, 3], "encoding": "uint8 Viridis RGB"},
         "source_training_checkpoint": source.name,
         "training_epoch": int(state.get("epoch", 0)),
-        "method": str(state.get("method", "paper_style_polishnetu")),
-        "polish_state_dict": state["polish_state_dict"],
     }
+    if "polish_state_dict" in state:
+        artifact = {
+            **common,
+            "artifact_type": "pressure_enhancement_inference",
+            "model": "PaperPolishNetU",
+            "base_channels": int(state.get("base_channels", 24)),
+            "method": str(state.get("method", "paper_style_polishnetu")),
+            "polish_state_dict": state["polish_state_dict"],
+        }
+    elif "model_state_dict" in state:
+        artifact = {
+            **common,
+            "artifact_type": "pressure_enhancement_baseline_inference",
+            "model": "PolishNetU",
+            "base_channels": int(state.get("base_channels", 8)),
+            "residual_scale": float(state.get("residual_scale", 0.125)),
+            "method": str(state.get("method", "legacy_polishnetu_baseline")),
+            "model_state_dict": state["model_state_dict"],
+        }
+    else:
+        raise KeyError(
+            f"{source} contains neither 'polish_state_dict' nor 'model_state_dict'"
+        )
     torch.save(artifact, destination)
     manifest_destination = (
         Path(manifest_path)
@@ -589,7 +610,11 @@ def package_model(
         else destination.with_suffix(".manifest.json")
     )
     manifest_destination.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {key: value for key, value in artifact.items() if key != "polish_state_dict"}
+    manifest = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"polish_state_dict", "model_state_dict"}
+    }
     manifest.update({"artifact_file": destination.name, "sha256": _sha256(destination), "bytes": destination.stat().st_size})
     manifest_destination.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Inference model saved to {destination}")
