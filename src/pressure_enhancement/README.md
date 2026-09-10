@@ -123,3 +123,40 @@ joint_valid   (N, 14)         关节有效标记
 安装项目依赖：`pip install -r requirements.txt`。训练姿态监督依赖 `controlnet-aux` 和其预训练 OpenPose 权重；首次运行会读取本地缓存或下载权重。CUDA 可用时训练自动使用 GPU。
 
 当前主流程使用真实关节标注和多帧压力伪真值。它比“输入重建输入”可靠，但稳健 target 仍由传感器序列统计构造，不能视为独立测得的无噪声压力真值。
+
+## 双模型关节门控融合
+
+`ensemble_enhance_raw_sleep.py` 同时运行最终论文流程模型
+`pressure_enhancement_v1.pt` 和强增强模型
+`annotated_pressure_strong_v0.pt`。两路模型均以原始压力图为输入，不会将一个模型的输出
+传给另一个模型。脚本依据真实 14 关节坐标构建软掩膜，只在躯干、髋部和四肢连接区域保留
+有上限的正向增强残差。
+
+在仓库根目录执行以下单行命令。先使用 `--max-samples 200` 检查生成的对比图，确认关节
+掩膜覆盖正确后，再将其改为 `0` 处理全部样本：
+
+```powershell
+& 'C:\Users\system0618\AppData\Local\Programs\Python\Python312\python.exe' -m src.pressure_enhancement.ensemble_enhance_raw_sleep --input-json 'data/raw/睡姿 区域划分data/区域划分/data.json' --keypoints-json 'E:\workplace\数据集\关节位置\关节位置.json' --v1-checkpoint 'models/pressure_enhancement_v1.pt' --strong-checkpoint 'models/annotated_pressure_strong_v0.pt' --output-h5 'data/processed/raw_sleep_ensemble_enhanced.h5' --comparison-output '..\压力增强对比图\融合模型\ensemble_comparison.png' --max-samples 200 --batch-size 128
+```
+
+输出 HDF5 具有以下数据集：
+
+```text
+input_images       原始 Viridis RGB 压力图
+v1_images          v1 的结构保持输出
+strong_images      强增强模型输出
+enhanced_images    真实关节门控后的最终融合图
+enhancement_mask   用于融合的软掩膜
+```
+
+默认融合权重为 `v1=0.15`、`strong=0.85`，强模型推理强度为 `2.0`，正向增益上限为 `0.75`。
+默认 `--gate-threshold 0.20` 会移除软掩膜低置信度边缘，确保背景保持原始压力值。
+若躯干仍不够明显，可将 `--strong-weight` 调至 `0.9`；若边缘过硬，可将
+`--gate-threshold` 降至 `0.15`，调整后应先复查对比图。
+
+若只使用 `pressure_enhancement_v1.pt` 消除背景模糊，加入 `--v1-only`。该模式不加载强增强模型，
+只在真实关节掩膜内使用 v1 输出，掩膜外逐像素保留原始压力：
+
+```powershell
+& 'C:\Users\system0618\AppData\Local\Programs\Python\Python312\python.exe' -m src.pressure_enhancement.ensemble_enhance_raw_sleep --input-json 'data/raw/睡姿 区域划分data/区域划分/data.json' --keypoints-json 'E:\workplace\数据集\关节位置\关节位置.json' --v1-checkpoint 'models/pressure_enhancement_v1.pt' --output-h5 'data/processed/raw_sleep_v1_body_only.h5' --comparison-output '..\压力增强对比图\融合模型\v1_body_only_comparison.png' --max-samples 200 --batch-size 128 --v1-only --gate-threshold 0.20
+```
