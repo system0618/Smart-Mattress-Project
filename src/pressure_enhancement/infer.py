@@ -33,7 +33,7 @@ def run_enhancement(
     checkpoint_path: str | Path,
     output_h5: str | Path,
     batch_size: int = 16,
-    base_channels: int = 8,
+    base_channels: int | None = None,
     device: str | None = None,
     overwrite: bool = False,
 ) -> Path:
@@ -50,9 +50,21 @@ def run_enhancement(
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
 
-    inference_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = PolishNetU(base_channels=base_channels).to(inference_device)
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    if state.get("model") == "PaperPolishNetU" or "polish_state_dict" in state:
+        raise ValueError(
+            "This is a paper-pipeline model. Run "
+            "'python -m src.pressure_enhancement.paper_pipeline export' instead."
+        )
+    if "model_state_dict" not in state:
+        raise KeyError(f"{checkpoint} does not contain a PolishNetU state dictionary")
+    inferred_channels = int(state.get("base_channels", 8))
+    inferred_scale = float(state.get("residual_scale", 0.125))
+    inference_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    model = PolishNetU(
+        base_channels=base_channels if base_channels is not None else inferred_channels,
+        residual_scale=inferred_scale,
+    ).to(inference_device)
     model.load_state_dict(state["model_state_dict"])
     model.eval()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +106,10 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--base-channels", type=int, default=8)
+    parser.add_argument(
+        "--base-channels", type=int, default=None,
+        help="Override the channel count stored in a legacy checkpoint when needed",
+    )
     parser.add_argument("--device", default=None, help="Defaults to CUDA when available")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()

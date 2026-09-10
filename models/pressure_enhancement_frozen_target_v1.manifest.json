@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "input": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "Viridis RGB in [0, 1]"
+  },
+  "output": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "uint8 Viridis RGB"
+  },
+  "source_training_checkpoint": "paper_polish_frozen_target.pt",
+  "training_epoch": 40,
+  "artifact_type": "pressure_enhancement_inference",
+  "model": "PaperPolishNetU",
+  "base_channels": 24,
+  "method": "frozen_pretrained_pose_plus_polishnetu",
+  "artifact_file": "pressure_enhancement_frozen_target_v1.pt",
+  "sha256": "2163482dc10b06ffd62f33aabcbebd3377376cd94972feccc804873c9e287cc6",
+  "bytes": 53157534
+}

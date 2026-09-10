@@ -12,6 +12,7 @@ against a hand-crafted brightened target and no spatial gate is used at export.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -61,6 +62,41 @@ class AnnotatedPoseDataset(Dataset):
         joints = torch.from_numpy(np.asarray(file["joints"][index], dtype=np.float32))
         valid = torch.from_numpy(np.asarray(file["joint_valid"][index], dtype=np.float32))
         return image_tensor, target_tensor, body_mask, joints, valid
+
+    def __del__(self) -> None:
+        if self._file is not None:
+            self._file.close()
+
+
+class PressureImageDataset(Dataset):
+    """Read only RGB pressure images for deployment-time enhancement."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = str(path)
+        self._file: h5py.File | None = None
+        with h5py.File(self.path, "r") as file:
+            self.key = "input_images" if "input_images" in file else "images"
+            if self.key not in file:
+                raise KeyError(f"{self.path} needs an 'input_images' or 'images' dataset")
+            self.length = len(file[self.key])
+
+    def __len__(self) -> int:
+        return self.length
+
+    def _open(self) -> h5py.File:
+        if self._file is None:
+            self._file = h5py.File(self.path, "r")
+        return self._file
+
+    def __getitem__(self, index: int) -> torch.Tensor:
+        raw_image = np.asarray(self._open()[self.key][index])
+        if raw_image.ndim != 3 or raw_image.shape[-1] != 3:
+            raise ValueError(f"Expected HWC RGB image, got {raw_image.shape}")
+        needs_uint8_scale = np.issubdtype(raw_image.dtype, np.integer)
+        image = raw_image.astype(np.float32, copy=True)
+        if needs_uint8_scale or float(image.max(initial=0.0)) > 1.0:
+            image /= 255.0
+        return torch.from_numpy(image).permute(2, 0, 1) * 2.0 - 1.0
 
     def __del__(self) -> None:
         if self._file is not None:
@@ -514,6 +550,78 @@ def evaluate(
     return report
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def package_model(
+    input_checkpoint: str | Path,
+    output_checkpoint: str | Path,
+    manifest_path: str | Path | None = None,
+) -> Path:
+    """Create a compact inference artifact without OpenPose or optimizer state.
+
+    Both paper-pipeline checkpoints and the earlier ``PolishNetU`` checkpoints
+    are supported.  The latter are retained as reproducible baselines and are
+    exported with the same self-describing metadata as the recommended model.
+    """
+    source = Path(input_checkpoint)
+    state = torch.load(source, map_location="cpu", weights_only=False)
+    destination = Path(output_checkpoint)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    common = {
+        "format_version": 1,
+        "input": {"layout": "NHWC", "shape": [24, 44, 3], "encoding": "Viridis RGB in [0, 1]"},
+        "output": {"layout": "NHWC", "shape": [24, 44, 3], "encoding": "uint8 Viridis RGB"},
+        "source_training_checkpoint": source.name,
+        "training_epoch": int(state.get("epoch", 0)),
+    }
+    if "polish_state_dict" in state:
+        artifact = {
+            **common,
+            "artifact_type": "pressure_enhancement_inference",
+            "model": "PaperPolishNetU",
+            "base_channels": int(state.get("base_channels", 24)),
+            "method": str(state.get("method", "paper_style_polishnetu")),
+            "polish_state_dict": state["polish_state_dict"],
+        }
+    elif "model_state_dict" in state:
+        artifact = {
+            **common,
+            "artifact_type": "pressure_enhancement_baseline_inference",
+            "model": "PolishNetU",
+            "base_channels": int(state.get("base_channels", 8)),
+            "residual_scale": float(state.get("residual_scale", 0.125)),
+            "method": str(state.get("method", "legacy_polishnetu_baseline")),
+            "model_state_dict": state["model_state_dict"],
+        }
+    else:
+        raise KeyError(
+            f"{source} contains neither 'polish_state_dict' nor 'model_state_dict'"
+        )
+    torch.save(artifact, destination)
+    manifest_destination = (
+        Path(manifest_path)
+        if manifest_path is not None
+        else destination.with_suffix(".manifest.json")
+    )
+    manifest_destination.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"polish_state_dict", "model_state_dict"}
+    }
+    manifest.update({"artifact_file": destination.name, "sha256": _sha256(destination), "bytes": destination.stat().st_size})
+    manifest_destination.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Inference model saved to {destination}")
+    print(f"Model manifest saved to {manifest_destination}")
+    return destination
+
+
 @torch.inference_mode()
 def export(
     input_h5: str | Path,
@@ -528,18 +636,19 @@ def export(
     model = PaperPolishNetU(int(state.get("base_channels", 24))).to(device)
     model.load_state_dict(state["polish_state_dict"])
     model.eval()
-    dataset = AnnotatedPoseDataset(input_h5)
+    dataset = PressureImageDataset(input_h5)
     loader = _loader(dataset, batch_size, False, device)
     destination = Path(output_h5)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(input_h5, "r") as source, h5py.File(destination, "w") as output:
-        shape = source["input_images"].shape
+        input_key = "input_images" if "input_images" in source else "images"
+        shape = source[input_key].shape
         images = output.create_dataset(
             "images", shape=shape, dtype=np.uint8,
             chunks=(min(batch_size, shape[0]), *shape[1:]), compression="gzip",
         )
         offset = 0
-        for batch, _, _, _, _ in tqdm(loader, desc="export paper enhancement", unit="batch"):
+        for batch in tqdm(loader, desc="export paper enhancement", unit="batch"):
             prediction = model(batch.to(device))
             rgb = ((prediction + 1.0) * 127.5).clamp(0, 255).byte().permute(0, 2, 3, 1).cpu().numpy()
             images[offset:offset + len(rgb)] = rgb
@@ -590,6 +699,14 @@ def main() -> None:
         default="../压力增强对比图/论文流程/paper_final_comparison.png",
     )
 
+    package_parser = subparsers.add_parser(
+        "package-model",
+        help="extract a compact PaperPolishNetU artifact for inference",
+    )
+    package_parser.add_argument("--input-checkpoint", required=True)
+    package_parser.add_argument("--output", default="models/pressure_enhancement_v1.pt")
+    package_parser.add_argument("--manifest", default="models/pressure_enhancement_v1.manifest.json")
+
     for current in (pose_parser, polish_parser, joint_parser):
         current.add_argument("--epochs", type=int, default=40)
         current.add_argument("--batch-size", type=int, default=16)
@@ -619,6 +736,8 @@ def main() -> None:
         )
     elif args.command == "export":
         export(args.input_h5, args.checkpoint, args.output_h5, args.comparison_output, args.batch_size)
+    elif args.command == "package-model":
+        package_model(args.input_checkpoint, args.output, args.manifest)
     else:
         evaluate(args.test_h5, args.checkpoint, args.output, args.batch_size, args.max_samples)
 

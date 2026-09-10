@@ -86,30 +86,44 @@ def save_comparison(
             # same recording do not fill the entire comparison sheet.
             users = source.get("user")
             ranked = np.argsort(sample_scores)[::-1]
-            selected: list[int] = []
+            # Build one global, time-separated ranking before splitting it
+            # into pages. The former implementation applied selection_page
+            # only after the first page was already full, so every requested
+            # page could repeat the same strongest samples.
+            primary: list[int] = []
+            secondary: list[int] = []
+            time_separated: list[int] = []
             if users is not None:
                 user_values = np.asarray(users[:])
                 seen_users: set[bytes] = set()
                 for index in ranked:
                     index = int(index)
-                    user = user_values[index]
-                    if user in seen_users or not all(abs(index - previous) >= 30 for previous in selected):
+                    if not all(abs(index - previous) >= 30 for previous in time_separated):
                         continue
-                    seen_users.add(user)
-                    selected.append(index)
-                    if len(selected) == count:
-                        break
-            if len(selected) < count:
-                skip = selection_page * count
+                    time_separated.append(index)
+                    user = user_values[index]
+                    if user in seen_users:
+                        secondary.append(index)
+                    else:
+                        seen_users.add(user)
+                        primary.append(index)
+            else:
                 for index in ranked:
-                    if all(abs(int(index) - previous) >= 30 for previous in selected):
-                        if skip:
-                            skip -= 1
-                            continue
-                        selected.append(int(index))
-                    if len(selected) == count:
-                        break
-            indices = np.asarray(selected[:count], dtype=np.int64)
+                    index = int(index)
+                    if all(abs(index - previous) >= 30 for previous in time_separated):
+                        time_separated.append(index)
+                        primary.append(index)
+            candidates = primary + secondary
+            start = selection_page * count
+            indices = np.asarray(candidates[start:start + count], dtype=np.int64)
+            if len(indices) < count:
+                # A deployment smoke test or a short recording may contain
+                # fewer than 30 frames. Preserve the requested page when
+                # possible, then fall back to the ranked adjacent frames.
+                fallback = [int(index) for index in ranked if int(index) not in indices]
+                indices = np.asarray(
+                    list(indices) + fallback[: count - len(indices)], dtype=np.int64
+                )
         # h5py fancy indexing requires monotonically increasing indices; read
         # the handful of ranked frames individually to preserve score order.
         original_frames = _unit_float(np.stack([original[int(index)] for index in indices]))

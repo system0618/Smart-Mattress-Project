@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "input": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "Viridis RGB in [0, 1]"
+  },
+  "output": {
+    "layout": "NHWC",
+    "shape": [
+      24,
+      44,
+      3
+    ],
+    "encoding": "uint8 Viridis RGB"
+  },
+  "source_training_checkpoint": "annotated_pressure_strong_final.pt",
+  "training_epoch": 40,
+  "artifact_type": "pressure_enhancement_baseline_inference",
+  "model": "PolishNetU",
+  "base_channels": 8,
+  "residual_scale": 0.6,
+  "method": "legacy_polishnetu_baseline",
+  "artifact_file": "annotated_pressure_strong_v0.pt",
+  "sha256": "54cf3eaeb7580dde1d88e31ed89a483cb351176605158098030ed02ec2536df8",
+  "bytes": 39423726
+}
